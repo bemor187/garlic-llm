@@ -1,5 +1,6 @@
 // The interface's text in every language (included by ui.c). One entry per StrId, the languages in LANG_* order:
-// es, en, pt, ru, fr, de, ar, ja, zh-Hans, zh-Hant, ko.
+// es, en, pt, ru, fr, de, ar, ja, zh-Hans, zh-Hant, ko. pc/export_chat.py reads this file too: the Chinese, Japanese
+// and Korean characters found here get glyphs of their own at the hint and title sizes.
 
 static const char* strings[N_STRINGS][N_LANGS] = {
     [S_TAGLINE] = {"%s en la GPU de tu PS4.", "%s on your PS4's GPU.", "%s na GPU do seu PS4.", "%s на GPU вашей PS4.",   // the model's name

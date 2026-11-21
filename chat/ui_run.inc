@@ -176,7 +176,7 @@ static void draw_text_scaled(const Font* f, float x, float y, const char* s, uin
                     if (g.kind == 1) {
                         const uint8_t* c = g.bm + (vv * g.w + uu) * 4;
                         r += c[0] * wgt * c[3], gg += c[1] * wgt * c[3], b += c[2] * wgt * c[3], a += c[3] * wgt;
-                    } else a += g.bm[vv * g.w + uu] * wgt;
+                    } else a += glyph_alpha(&g, vv * g.w + uu) * wgt;
                 }
                 if (a < 2) continue;
                 uint32_t* d = back + py * SCREEN_W + px;

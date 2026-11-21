@@ -6,8 +6,9 @@ Voz a texto: Parakeet TDT 0.6B v3, NVIDIA (https://huggingface.co/nvidia/parakee
 Emoji: Twemoji 16.0.1, Copyright 2019 Twitter, Inc. y otros colaboradores,
        https://github.com/jdecked/twemoji, licencia CC-BY 4.0
        (https://creativecommons.org/licenses/by/4.0/). Imágenes escaladas.
-Fuentes: Selawik (Microsoft), Noto Sans, Noto Sans Symbols / Symbols 2 / Math, Noto Music, Noto Sans SC y KR,
-         Arimo, Inconsolata, Cascadia Mono (Microsoft): SIL Open Font License 1.1; DejaVu Sans: licencia de
+Fuentes: Selawik (Microsoft), Noto Sans, Noto Sans Arabic, Noto Sans Symbols / Symbols 2 / Math, Noto Music,
+         Noto Sans SC, TC, JP y KR, Arimo, Inconsolata, Cascadia Mono (Microsoft): SIL Open Font License 1.1;
+         DejaVu Sans: licencia de
          Bitstream Vera y dominio público. Convertidas a mapas de bits. Avisos de copyright y textos de las
          licencias en LICENCIAS_FUENTES.txt.
 Logotipo e icono: dibujados para Garlic LLM (pc/make_brand.py).

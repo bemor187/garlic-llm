@@ -340,12 +340,22 @@ static void fade_rows(int y0, int y1, int a0, int a1) {
 
 // ---- fonts (PFN2 from pc/export_chat.py) ----------------------------------------------------------------------
 // Header "<4sHHII" (magic, line height, ascent, glyph count, bitmap bytes); per glyph "<IHHhhHBBI" (codepoint,
-// width, height, left, top, advance, kind 0 = alpha / 1 = RGBA, pad, bitmap offset), sorted by codepoint; then
-// the bitmaps; then optionally "SEQS" + count + per sequence "<BBHI" (length, 0, 0, glyph index) and its
-// codepoints: emoji made of several characters (flags, keycaps, joined emoji), drawn as one image.
+// width, height, left, top, advance, kind 0 = alpha / 1 = RGBA / 2 = 4-bit alpha (two pixels a byte, the first in
+// the low half), pad, bitmap offset), sorted by codepoint; then the bitmaps; then optionally "SEQS" + count + per
+// sequence "<BBHI" (length, 0, 0, glyph index) and its codepoints: emoji made of several characters (flags,
+// keycaps, joined emoji), drawn as one image.
 // Emoji images are Twemoji (CC-BY 4.0, credited in assets/CREDITOS.txt).
+//
+// Chinese, Japanese and Korean: the Simplified Chinese forms sit at their own codepoints; the Japanese and the
+// Traditional Chinese forms that differ (or that the first set lacks) at VAR_JP / VAR_TC + codepoint. Each
+// language looks first in its own set (cjk_order). The hint and title fonts also hold the interface's own
+// characters at UI_VAR + (VAR_JP / VAR_TC +) codepoint; font_head, the copy of font_big for markdown headings,
+// stops before them, so a heading is not drawn half in one size and half in another.
 #define FONT_HEADER 16
 #define FONT_REC 20
+#define VAR_JP 0x200000u
+#define VAR_TC 0x400000u
+#define UI_VAR 0x800000u
 
 typedef struct Font {
     uint16_t line, ascent;
@@ -361,16 +371,19 @@ typedef struct Font {
     uint32_t* seq_glyph;
     const uint8_t** seq_cps;
     int space;                 // advance of ' '
+    int has_ui;                // holds interface characters (UI_VAR)
+    int embolden;              // bold: a glyph it borrows from the regular font is drawn twice, a pixel apart
 } Font;
 
 typedef struct {
     uint16_t w, h, adv;
     int16_t bx, by;
     uint8_t kind;
+    uint8_t borrowed;   // from a font further down the chain (font->next...)
     const uint8_t* bm;
 } Glyph;
 
-static Font font, font_bold, font_italic, font_small, font_big, mono;
+static Font font, font_bold, font_italic, font_small, font_big, font_head, mono;
 
 static uint32_t utf8_next(const char** s) {
     const uint8_t* p = (const uint8_t*)*s;
@@ -405,6 +418,11 @@ static void glyph_at(const Font* f, int i, Glyph* g) {
     g->bm = f->bitmaps + off;
 }
 
+// Coverage (0-255) of pixel k (row by row) of an alpha glyph.
+static inline uint32_t glyph_alpha(const Glyph* g, int k) {
+    return g->kind == 2 ? (uint32_t)(g->bm[k >> 1] >> ((k & 1) << 2) & 15) * 17 : g->bm[k];
+}
+
 static int find_cp(const Font* f, uint32_t cp) {
     int lo = 0, hi = (int)f->n - 1;
     while (lo <= hi) {
@@ -413,6 +431,28 @@ static int find_cp(const Font* f, uint32_t cp) {
         if (f->cps[mid] < cp) lo = mid + 1;
         else hi = mid - 1;
     }
+    return -1;
+}
+
+static int cjk_variant_cp(uint32_t c) {   // may have forms of its own per language (see VAR_JP)
+    return (c >= 0x2E80 && c <= 0x9FFF) || (c >= 0xAC00 && c <= 0xD7A3) || (c >= 0xF900 && c <= 0xFAFF) ||
+           (c >= 0xFE30 && c <= 0xFE4F) || (c >= 0xFF00 && c <= 0xFFEF) || (c >= 0x1100 && c <= 0x11FF) ||
+           (c >= 0x20000 && c <= 0x3FFFF);
+}
+
+static const uint32_t* cjk_order(void) {   // where to look first: the forms of the interface's language
+    static const uint32_t jp[3] = {VAR_JP, 0, VAR_TC}, tc[3] = {VAR_TC, 0, VAR_JP}, sc[3] = {0, VAR_TC, VAR_JP};
+    return ui_lang == LANG_JA ? jp : ui_lang == LANG_ZH_HANT || ui_lang == LANG_KO ? tc : sc;   // (Korean hanja:
+}                                                                                          // traditional forms)
+
+static int find_glyph(const Font* f, uint32_t cp) {
+    if (!cjk_variant_cp(cp)) return find_cp(f, cp);
+    const uint32_t* o = cjk_order();
+    for (int u = f->has_ui ? 0 : 1; u < 2; u++)
+        for (int r = 0; r < 3; r++) {
+            int i = find_cp(f, (u ? 0 : UI_VAR) + o[r] + cp);
+            if (i >= 0) return i;
+        }
     return -1;
 }
 
@@ -433,6 +473,7 @@ static int font_load(Font* f, const char* path) {
         memcpy(&f->cps[i], f->recs + i * FONT_REC, 4);
         if (f->cps[i] == 0xFFFD) f->fallback = (int)i;
     }
+    f->has_ui = f->n && f->cps[f->n - 1] >= UI_VAR;
     const uint8_t* p = f->bitmaps + bitmap_bytes;
     if ((size_t)(p - d) + 8 <= size && !memcmp(p, "SEQS", 4)) {
         memcpy(&f->n_seq, p + 4, 4);
@@ -516,17 +557,20 @@ static int next_glyph(const Font* f, const char** s, const char* end, Glyph* g) 
                 *s = after;
                 glyph_at(t, (int)t->seq_glyph[k], g);
                 if (t != f) g->by += (int)f->ascent - (int)t->ascent;   // keep the baseline of the asking font
+                g->borrowed = t != f;
                 return 1;
             }
-            int i = find_cp(t, cp);
+            int i = find_glyph(t, cp);
             if (i >= 0) {
                 glyph_at(t, i, g);
                 if (t != f) g->by += (int)f->ascent - (int)t->ascent;
+                g->borrowed = t != f;
                 return 1;
             }
         }
         missing(cp);
         glyph_at(f, f->fallback, g);
+        g->borrowed = 0;
         return 1;
     }
     return 0;
@@ -540,28 +584,37 @@ static int text_width(const Font* f, const char* s, const char* end) {
 }
 static int str_width(const Font* f, const char* s) { return text_width(f, s, s + strlen(s)); }
 
+static void blit_glyph(const Glyph* g, int gx, int gy, uint32_t rgb) {
+    if (gx + g->w <= clip_x0 || gx >= clip_x1 || gy + g->h <= clip_y0 || gy >= clip_y1) return;
+    for (int j = 0; j < g->h; j++) {
+        int py = gy + j;
+        if (py < clip_y0 || py >= clip_y1) continue;
+        uint32_t* row = back + py * SCREEN_W;
+        for (int i = 0; i < g->w; i++) {
+            int px = gx + i;
+            if (px < clip_x0 || px >= clip_x1) continue;
+            if (g->kind == 1) {
+                const uint8_t* c = g->bm + (j * g->w + i) * 4;
+                if (c[3]) blend(row + px, (uint32_t)c[0] << 16 | c[1] << 8 | c[2], c[3] * text_alpha / 255);
+            } else {
+                uint32_t a = glyph_alpha(g, j * g->w + i);
+                if (a) blend(row + px, rgb, a * text_alpha / 255);
+            }
+        }
+    }
+}
+
+// Left to right, top-left at (x, y); returns the x after the text.
+static void blit_font_glyph(const Font* f, const Glyph* g, int gx, int gy, uint32_t rgb) {
+    blit_glyph(g, gx, gy, rgb);
+    if (f->embolden && g->borrowed && g->kind != 1) blit_glyph(g, gx + 1, gy, rgb);
+}
+
 // Draws s[0..end) with its top-left at (x, y); returns the x after the text. Emoji keep their own colours.
 static int draw_text(const Font* f, int x, int y, const char* s, const char* end, uint32_t rgb) {
     Glyph g;
     while (next_glyph(f, &s, end, &g)) {
-        int gx = x + g.bx, gy = y + g.by;
-        if (gx + g.w > clip_x0 && gx < clip_x1 && gy + g.h > clip_y0 && gy < clip_y1)
-            for (int j = 0; j < g.h; j++) {
-                int py = gy + j;
-                if (py < clip_y0 || py >= clip_y1) continue;
-                uint32_t* row = back + py * SCREEN_W;
-                for (int i = 0; i < g.w; i++) {
-                    int px = gx + i;
-                    if (px < clip_x0 || px >= clip_x1) continue;
-                    if (g.kind == 1) {
-                        const uint8_t* c = g.bm + (j * g.w + i) * 4;
-                        if (c[3]) blend(row + px, (uint32_t)c[0] << 16 | c[1] << 8 | c[2], c[3] * text_alpha / 255);
-                    } else {
-                        uint32_t a = g.bm[j * g.w + i];
-                        if (a) blend(row + px, rgb, a * text_alpha / 255);
-                    }
-                }
-            }
+        blit_font_glyph(f, &g, x + g.bx, y + g.by, rgb);
         x += g.adv;
     }
     return x;
@@ -625,6 +678,10 @@ int ui_init(const char* dir) {
         }
     }
     font_bold.next = font_italic.next = font_small.next = font_big.next = mono.next = &font;
+    font_head = font_big;   // the headings' copy: without the interface's own characters (UI_VAR, at the end)
+    while (font_head.n && font_head.cps[font_head.n - 1] >= UI_VAR) font_head.n--;
+    font_head.has_ui = 0;
+    font_bold.embolden = font_head.embolden = 1;
     snprintf(path, sizeof(path), "%s/logo.bin", dir);
     if (images_load(path)) say("logo.bin missing");
     make_background();
@@ -1041,7 +1098,7 @@ static void parse_inline(const char* a, const char* b, int plain) {
 
 static const Font* style_font(int st, int heading) {
     if (st & ST_CODE) return &mono;
-    if (heading) return heading <= 2 ? &font_big : &font_bold;
+    if (heading) return heading <= 2 ? &font_head : &font_bold;
     if (st & ST_BOLD) return &font_bold;
     if (st & ST_ITALIC) return &font_italic;
     return &font;
