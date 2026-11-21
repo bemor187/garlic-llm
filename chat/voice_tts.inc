@@ -47,9 +47,17 @@ static float tts_pcm[24000 * 13];
 static void tts_gaps_log(void);
 static void tts_reply_summary(void);
 
+// The console's language as a voice language: the first guess for a reply's language. Read from the system setting
+// itself (not from the menus' language), so every voice language counts: Japanese, Arabic, French...
 static const char* lang_code(void) {
-    static const char* c[N_LANGS] = {"es", "en", "pt", "ru"};
-    return c[ui_lang];
+    static const char* code;
+    if (!code) {
+        int l = 1;
+        sceSystemServiceParamGetInt(ORBIS_SYSTEM_SERVICE_PARAM_ID_LANG, &l);
+        code = l == 0 ? "ja" : l == 21 ? "ar" : l == 3 || l == 20 ? "es" : l == 7 || l == 17 ? "pt" : l == 8 ? "ru" :
+               l == 2 || l == 22 ? "fr" : l == 4 ? "de" : l == 5 ? "it" : "en";
+    }
+    return code;
 }
 
 static void tts_boot(void) {
@@ -77,6 +85,7 @@ static void tts_boot(void) {
     // T3 reads each piece's prompt in batches of up to 32 positions, in Parakeet's work buffers (idle while T3
     // runs, as for S3Gen)
     t3_scratch(&eng, eng.asr.ws_begin, eng.asr.ws_end - eng.asr.ws_begin);
+    st_console_lang(lang_code());   // (text with kanji but no kana is Japanese on a Japanese console)
     tts_ready = 1;
     tts.msg = -1;
 }
@@ -247,7 +256,10 @@ static int tts_piece_end(const Msg* m, int* cut) {
 #define TTS_MIN_S 6.0
 static int tts_join_fluent(const Msg* m, int start, int end);
 
-static int hard_cut_at(const char* t, int q, int end) {   // st_next_piece ended the piece at a space, not after punctuation
+// st_next_piece ended the piece at a space, not after punctuation (or, in Japanese, between two characters)
+static int hard_cut_at(const char* t, int q, int end) {
+    if (end > q + 3 && (uint8_t)t[end - 3] == 0xE3 && (uint8_t)t[end] >= 0xE3 && (uint8_t)t[end] <= 0xE9)
+        return !((uint8_t)t[end - 2] == 0x80 && ((uint8_t)t[end - 1] == 0x81 || (uint8_t)t[end - 1] == 0x82));   // 、。
     return end > q + 1 && t[end - 1] == ' ' && !strchr(".!?,;:\"')]*", t[end - 2]) && (uint8_t)t[end - 2] != 0xA6;
 }
 
@@ -385,7 +397,7 @@ static int tts_piece_end_punct(const Msg* m, int* cut) {
         }
         if (commas)   // the first comma 15 bytes in, if it comes before the sentence's end
             for (int i = 15; i + 1 < lim && (end <= 0 || i < end); i++)
-                if (t[i] == ',' && t[i + 1] == ' ') return i + 2;
+                if (st_comma_end(t, lim, i)) return st_comma_end(t, lim, i);
         if (end > 0 && st_spoken_len(t, end) <= 100 && !hard_cut_at(t, 0, end)) return end;   // a short sentence
         // a long first sentence without a comma (waiting for all of it would delay the first sound): cut before a
         // word that opens a phrase ("el día, | porque las..."), said as a clause: the first one 25-60 bytes in once
@@ -411,7 +423,7 @@ static int tts_piece_end_punct(const Msg* m, int* cut) {
     double left = (double)(aout_queued() - aout_played()) / 24000.0;
     if (commas && left < TTS_CLAUSE_S)   // the audio is running out: a clause to a comma 25 bytes in will do
         for (int i = q + 25; i + 1 < lim && (end <= 0 || i < end); i++)
-            if (t[i] == ',' && t[i + 1] == ' ') return i + 2;
+            if (st_comma_end(t, lim, i)) return st_comma_end(t, lim, i);
     // about to fall silent with no comma written: cut before a word that opens a phrase ("más intensamente, | que los
     // otros colores"), so the audio does not run dry
     if (commas && left < 2.0 && end <= q && st_spoken_len(t + q, lim - q) >= 60) {
