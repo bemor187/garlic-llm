@@ -497,10 +497,12 @@ static int font_load(Font* f, const char* path) {
     return 0;
 }
 
-// Joiners, variation selectors, keycap marks and skin-tone modifiers outside a known sequence draw as nothing.
+// Joiners, variation selectors, keycap marks, skin-tone modifiers outside a known sequence and the bidirectional
+// controls draw as nothing.
 static int invisible(uint32_t cp) {
     return (cp >= 0x200B && cp <= 0x200F) || (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0x1F3FB && cp <= 0x1F3FF) ||
-           (cp >= 0xE0000 && cp <= 0xE007F) || cp == 0x20E3;
+           (cp >= 0xE0000 && cp <= 0xE007F) || cp == 0x20E3 || (cp >= 0x202A && cp <= 0x202E) ||
+           (cp >= 0x2066 && cp <= 0x2069);
 }
 
 static void missing(uint32_t cp) {   // each character no font can draw is logged once
@@ -545,30 +547,122 @@ static int match_sequence(const Font* f, uint32_t cp, const char* s, const char*
     return best;
 }
 
-static int next_glyph(const Font* f, const char** s, const char* end, Glyph* g) {
+// ---- Arabic letters: joined by drawing each one in its contextual form (also Persian and Urdu) ------------------
+
+#include "arabic_forms.h"
+
+static const uint16_t* ar_letter(uint32_t cp) {   // its row of ar_forms, or NULL
+    if (cp < 0x0621 || cp > 0x06FF) return NULL;
+    int lo = 0, hi = (int)(sizeof(ar_forms) / sizeof(ar_forms[0])) - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        if (ar_forms[mid][0] == cp) return ar_forms[mid];
+        if (ar_forms[mid][0] < cp) lo = mid + 1;
+        else hi = mid - 1;
+    }
+    return NULL;
+}
+
+// Vowel signs and other marks over or under a letter: they do not break the joining.
+static int ar_mark(uint32_t c) {
+    return (c >= 0x0610 && c <= 0x061A) || (c >= 0x064B && c <= 0x065F) || c == 0x0670 || (c >= 0x06D6 && c <= 0x06DC) ||
+           (c >= 0x06DF && c <= 0x06E4) || c == 0x06E7 || c == 0x06E8 || (c >= 0x06EA && c <= 0x06ED);
+}
+
+// Joins on to the next letter (dual-joining letters, tatweel, zero-width joiner) / to the one before (those and
+// the right-joining letters). A zero-width non-joiner joins neither way.
+static int ar_joins_next(uint32_t c) {
+    const uint16_t* r;
+    return c == 0x0640 || c == 0x200D || ((r = ar_letter(c)) && r[3]);
+}
+static int ar_joins_prev(uint32_t c) {
+    const uint16_t* r;
+    return c == 0x0640 || c == 0x200D || ((r = ar_letter(c)) && r[2]);
+}
+
+static uint32_t cp_before(const char* begin, const char* at) {   // the character before `at`, marks skipped; 0 = none
+    while (at > begin) {
+        const char* p = at - 1;
+        while (p > begin && ((uint8_t)*p & 0xC0) == 0x80) p--;
+        const char* q = p;
+        uint32_t c = utf8_next(&q);
+        if (!ar_mark(c)) return c;
+        at = p;
+    }
+    return 0;
+}
+
+static uint32_t cp_after(const char* s, const char* end) {   // the next character, marks skipped; 0 = none
+    while (s < end && *s) {
+        uint32_t c = utf8_next(&s);
+        if (!ar_mark(c)) return c;
+    }
+    return 0;
+}
+
+// The form of letter cp (which started at `at`; *s is past it) among the text that began at `begin`: isolated,
+// final, initial or medial; lam followed by alef becomes one ligature (*s then moves past the alef).
+static uint32_t arabic_shape(uint32_t cp, const char* begin, const char* at, const char** s, const char* end) {
+    const uint16_t* r = ar_letter(cp);
+    if (!r) return cp;
+    int before = r[2] && ar_joins_next(cp_before(begin, at));
+    if (cp == 0x0644 && *s < end) {
+        const char* q = *s;
+        uint32_t n = utf8_next(&q);
+        for (size_t k = 0; k < sizeof(ar_lam_alef) / sizeof(ar_lam_alef[0]); k++)
+            if (ar_lam_alef[k][0] == n) {
+                *s = q;
+                return ar_lam_alef[k][before ? 2 : 1];
+            }
+    }
+    int after = r[3] && ar_joins_prev(cp_after(*s, end));
+    uint16_t f = before ? (after ? r[4] : r[2]) : (after ? r[3] : r[1]);
+    return f ? f : cp;
+}
+
+// Brackets read the other way round inside right-to-left text.
+static uint32_t mirror_cp(uint32_t c) {
+    static const uint32_t pairs[][2] = {{'(', ')'}, {')', '('}, {'[', ']'}, {']', '['}, {'{', '}'}, {'}', '{'},
+                                        {'<', '>'}, {'>', '<'}, {0xAB, 0xBB}, {0xBB, 0xAB}, {0x2039, 0x203A},
+                                        {0x203A, 0x2039}, {0xFD3E, 0xFD3F}, {0xFD3F, 0xFD3E}};
+    for (size_t i = 0; i < sizeof(pairs) / sizeof(pairs[0]); i++)
+        if (pairs[i][0] == c) return pairs[i][1];
+    return c;
+}
+
+// The next glyph of s[..end) (the text started at begin: Arabic letters look back to join); rtl: drawn right to
+// left (brackets mirrored). Returns 0 at the end, 2 for a mark that sits on the glyph before it, else 1.
+static int next_glyph(const Font* f, const char* begin, const char** s, const char* end, Glyph* g, int rtl) {
     while (*s < end && **s) {
-        uint32_t cp = utf8_next(s);
+        const char* at = *s;
+        uint32_t cp = utf8_next(s), base = cp;
         if (invisible(cp)) continue;
         if (cp == '\t') cp = ' ';
-        for (const Font* t = f; t; t = t->next) {
-            const char* after;
-            int k = match_sequence(t, cp, *s, end, &after);
-            if (k >= 0) {
-                *s = after;
-                glyph_at(t, (int)t->seq_glyph[k], g);
-                if (t != f) g->by += (int)f->ascent - (int)t->ascent;   // keep the baseline of the asking font
-                g->borrowed = t != f;
-                return 1;
+        if (cp >= 0x0621 && cp <= 0x06FF) cp = arabic_shape(cp, begin, at, s, end);
+        if (rtl) cp = mirror_cp(cp);
+        int mark = ar_mark(base) || (base >= 0x0300 && base <= 0x036F);
+        for (int pass = 0; pass < 2; pass++, cp = base) {   // (a form no font has: the plain letter)
+            for (const Font* t = f; t; t = t->next) {
+                const char* after;
+                int k = match_sequence(t, cp, *s, end, &after);
+                if (k >= 0) {
+                    *s = after;
+                    glyph_at(t, (int)t->seq_glyph[k], g);
+                    if (t != f) g->by += (int)f->ascent - (int)t->ascent;   // keep the baseline of the asking font
+                    g->borrowed = t != f;
+                    return 1;
+                }
+                int i = find_glyph(t, cp);
+                if (i >= 0) {
+                    glyph_at(t, i, g);
+                    if (t != f) g->by += (int)f->ascent - (int)t->ascent;
+                    g->borrowed = t != f;
+                    return mark ? 2 : 1;
+                }
             }
-            int i = find_glyph(t, cp);
-            if (i >= 0) {
-                glyph_at(t, i, g);
-                if (t != f) g->by += (int)f->ascent - (int)t->ascent;
-                g->borrowed = t != f;
-                return 1;
-            }
+            if (cp == base) break;
         }
-        missing(cp);
+        missing(base);
         glyph_at(f, f->fallback, g);
         g->borrowed = 0;
         return 1;
@@ -576,10 +670,14 @@ static int next_glyph(const Font* f, const char** s, const char* end, Glyph* g) 
     return 0;
 }
 
+static int has_rtl(const char* s, const char* e);
+static int bidi_draw(const Font* f, int x, int y, const char* s, const char* e, uint32_t rgb, int measure);
+
 static int text_width(const Font* f, const char* s, const char* end) {
     int w = 0;
+    const char* begin = s;
     Glyph g;
-    while (next_glyph(f, &s, end, &g)) w += g.adv;
+    while (next_glyph(f, begin, &s, end, &g, 0)) w += g.adv;
     return w;
 }
 static int str_width(const Font* f, const char* s) { return text_width(f, s, s + strlen(s)); }
@@ -610,17 +708,272 @@ static void blit_font_glyph(const Font* f, const Glyph* g, int gx, int gy, uint3
     if (f->embolden && g->borrowed && g->kind != 1) blit_glyph(g, gx + 1, gy, rgb);
 }
 
-// Draws s[0..end) with its top-left at (x, y); returns the x after the text. Emoji keep their own colours.
-static int draw_text(const Font* f, int x, int y, const char* s, const char* end, uint32_t rgb) {
+static int draw_ltr(const Font* f, int x, int y, const char* s, const char* end, uint32_t rgb) {
     Glyph g;
-    while (next_glyph(f, &s, end, &g)) {
+    const char* begin = s;
+    while (next_glyph(f, begin, &s, end, &g, 0)) {
         blit_font_glyph(f, &g, x + g.bx, y + g.by, rgb);
         x += g.adv;
     }
     return x;
 }
+
+// Right to left, from the right edge x1 (Arabic): each glyph goes to the left of the one before; a mark is centred
+// over its letter.
+static void draw_rtl(const Font* f, int x1, int y, const char* s, const char* end, uint32_t rgb) {
+    Glyph g;
+    const char* begin = s;
+    int x = x1, bx0 = x1, bw = 0;
+    for (int k; (k = next_glyph(f, begin, &s, end, &g, 1));) {
+        if (k == 2 && !g.adv) {
+            blit_font_glyph(f, &g, bx0 + (bw - g.w) / 2, y + g.by, rgb);
+            continue;
+        }
+        x -= g.adv;
+        bx0 = x + g.bx, bw = g.w;
+        blit_font_glyph(f, &g, bx0, y + g.by, rgb);
+    }
+}
+
+// Draws s[0..end) with its top-left at (x, y); returns the x after the text. Emoji keep their own colours.
+// Right-to-left text and the numbers and Latin words inside it are put in reading order first.
+static int draw_text(const Font* f, int x, int y, const char* s, const char* end, uint32_t rgb) {
+    if (has_rtl(s, end)) return bidi_draw(f, x, y, s, end, rgb, 0);
+    return draw_ltr(f, x, y, s, end, rgb);
+}
 static int draw_str(const Font* f, int x, int y, const char* s, uint32_t rgb) { return draw_text(f, x, y, s, s + strlen(s), rgb); }
 static void draw_center(const Font* f, int cx, int y, const char* s, uint32_t rgb) { draw_str(f, cx - str_width(f, s) / 2, y, s, rgb); }
+
+// ---- bidirectional text ------------------------------------------------------------------------------------------
+// The Unicode Bidirectional Algorithm (UAX #9) for one line, without explicit embeddings or isolates (those
+// characters count as nothing): character classes, the weak types (W1-W7), the neutrals (N1-N2), the levels
+// (I1-I2), trailing spaces at the paragraph's level (L1) and the reversal (L2). A paragraph's direction is that of
+// most of its letters, so "Python هي لغة برمجة" reads right to left.
+
+enum { BD_L, BD_R, BD_AL, BD_EN, BD_ES, BD_ET, BD_AN, BD_CS, BD_NSM, BD_BN, BD_B, BD_S, BD_WS, BD_ON };
+
+static int bidi_class(uint32_t c) {
+    if (c < 0x80) {
+        if (((c | 32) >= 'a' && (c | 32) <= 'z')) return BD_L;
+        if (c >= '0' && c <= '9') return BD_EN;
+        if (c == ' ') return BD_WS;
+        if (c == '\t') return BD_S;
+        if (c == '\n' || c == '\r') return BD_B;
+        if (c == '+' || c == '-') return BD_ES;
+        if (c == '#' || c == '$' || c == '%') return BD_ET;
+        if (c == ',' || c == '.' || c == '/' || c == ':') return BD_CS;
+        return c < 0x20 ? BD_BN : BD_ON;
+    }
+    if (c < 0xC0) {
+        if (c == 0xA0) return BD_CS;
+        if ((c >= 0xA2 && c <= 0xA5) || c == 0xB0 || c == 0xB1) return BD_ET;
+        if (c == 0xB2 || c == 0xB3 || c == 0xB9) return BD_EN;
+        if (c == 0xAA || c == 0xB5 || c == 0xBA) return BD_L;
+        return c == 0xAD ? BD_BN : BD_ON;
+    }
+    if (c == 0xD7 || c == 0xF7) return BD_ON;
+    if (c >= 0x0300 && c <= 0x036F) return BD_NSM;
+    if (c >= 0x0590 && c <= 0x05FF) return c >= 0x0591 && c <= 0x05BD ? BD_NSM : BD_R;   // Hebrew
+    if (c >= 0x07C0 && c <= 0x085F) return BD_R;   // N'Ko, Samaritan, Mandaic
+    if (c >= 0x0600 && c <= 0x08FF) {               // Arabic, Syriac, Thaana
+        if ((c >= 0x0660 && c <= 0x0669) || c == 0x066B || c == 0x066C || c <= 0x0605) return BD_AN;
+        if (c >= 0x06F0 && c <= 0x06F9) return BD_EN;   // (Persian digits count as European ones)
+        if (c == 0x060C) return BD_CS;
+        if (c == 0x066A) return BD_ET;
+        if (ar_mark(c) || (c >= 0x08D3 && c <= 0x08FF)) return BD_NSM;
+        return BD_AL;
+    }
+    if (c >= 0x2000 && c <= 0x206F) {
+        if (c <= 0x200A || c == 0x2028) return BD_WS;
+        if (c == 0x200E) return BD_L;
+        if (c == 0x200F) return BD_R;
+        if (c == 0x2029) return BD_B;
+        if (c == 0x202F) return BD_CS;
+        if (c >= 0x2030 && c <= 0x2034) return BD_ET;
+        if (c == 0x2044) return BD_CS;
+        if ((c >= 0x200B && c <= 0x200D) || (c >= 0x202A && c <= 0x202E) || c >= 0x2060) return BD_BN;
+        return BD_ON;
+    }
+    if ((c >= 0x2070 && c <= 0x2079 && c != 0x2071) || (c >= 0x2080 && c <= 0x2089)) return BD_EN;
+    if (c >= 0x20A0 && c <= 0x20CF) return BD_ET;
+    if (c >= 0x2100 && c <= 0x2BFF) return BD_ON;   // letterlike, arrows, maths, technical, shapes
+    if (c >= 0x2E00 && c <= 0x2E7F) return BD_ON;
+    if (c == 0x3000) return BD_WS;
+    if ((c >= 0x3001 && c <= 0x3004) || (c >= 0x3008 && c <= 0x3020) || c == 0x3030 || c == 0x30FB) return BD_ON;
+    if (c >= 0xFB1D && c <= 0xFB4F) return BD_R;
+    if (c >= 0xFB50 && c <= 0xFDFF) return BD_AL;
+    if (c >= 0xFE00 && c <= 0xFE0F) return BD_NSM;
+    if (c >= 0xFE70 && c <= 0xFEFE) return BD_AL;
+    if (c >= 0xFF10 && c <= 0xFF19) return BD_EN;
+    if ((c >= 0xFF01 && c <= 0xFF0F) || (c >= 0xFF1A && c <= 0xFF20) || (c >= 0xFF3B && c <= 0xFF40) ||
+        (c >= 0xFF5B && c <= 0xFF65))
+        return BD_ON;
+    if (c >= 0x1F000 && c <= 0x1FAFF) return BD_ON;   // emoji
+    return BD_L;
+}
+
+// Quick test: any right-to-left character in s[..e)? (UTF-8 lead bytes of U+0590-07FF, presentation forms FB1D-FEFF,
+// the right-to-left mark)
+static int has_rtl(const char* s, const char* e) {
+    for (const uint8_t* p = (const uint8_t*)s; p < (const uint8_t*)e && *p; p++) {
+        if (*p >= 0xD6 && *p <= 0xDF) return 1;
+        if (*p == 0xEF && p + 1 < (const uint8_t*)e && p[1] >= 0xAC && p[1] <= 0xBB) return 1;
+        if (*p == 0xE2 && p + 2 < (const uint8_t*)e && p[1] == 0x80 && p[2] == 0x8F) return 1;
+    }
+    return 0;
+}
+
+// The direction of a paragraph: right to left when most of its letters are (a tie: its first letter decides).
+static int para_rtl(const char* s, const char* e) {
+    if (!has_rtl(s, e)) return 0;
+    int l = 0, r = 0, first = -1;
+    while (s < e && *s) {
+        int k = bidi_class(utf8_next(&s));
+        if (k == BD_L) l++, first = first < 0 ? 0 : first;
+        else if (k == BD_R || k == BD_AL) r++, first = first < 0 ? 1 : first;
+    }
+    return r > l || (r == l && first == 1);
+}
+
+static int bd_neutral(int t) { return t == BD_B || t == BD_S || t == BD_WS || t == BD_ON; }
+
+// Levels of the n characters of classes t (changed in place) in a paragraph of direction rtl.
+static void bidi_levels(uint8_t* t, int n, int rtl, uint8_t* lv) {
+    static uint8_t orig[1024];
+    memcpy(orig, t, n);
+    const int sos = rtl ? BD_R : BD_L;
+    for (int i = 0; i < n; i++)   // W1: a mark takes the class of what it sits on
+        if (t[i] == BD_NSM || t[i] == BD_BN) t[i] = i ? t[i - 1] : sos;
+    for (int i = 0, last = sos; i < n; i++) {   // W2: numbers after Arabic letters are Arabic numbers; W3
+        if (t[i] == BD_L || t[i] == BD_R || t[i] == BD_AL) last = t[i];
+        else if (t[i] == BD_EN && last == BD_AL) t[i] = BD_AN;
+    }
+    for (int i = 0; i < n; i++)
+        if (t[i] == BD_AL) t[i] = BD_R;
+    for (int i = 1; i + 1 < n; i++) {   // W4: 1,5 / 1.5 / 10-20 stay one number
+        if (t[i] == BD_ES && t[i - 1] == BD_EN && t[i + 1] == BD_EN) t[i] = BD_EN;
+        else if (t[i] == BD_CS && t[i - 1] == t[i + 1] && (t[i - 1] == BD_EN || t[i - 1] == BD_AN)) t[i] = t[i - 1];
+    }
+    for (int i = 0; i < n;) {   // W5: $ and % next to a number are part of it
+        if (t[i] != BD_ET) {
+            i++;
+            continue;
+        }
+        int j = i;
+        while (j < n && t[j] == BD_ET) j++;
+        if ((i > 0 && t[i - 1] == BD_EN) || (j < n && t[j] == BD_EN)) memset(t + i, BD_EN, j - i);
+        i = j;
+    }
+    for (int i = 0; i < n; i++)   // W6
+        if (t[i] == BD_ES || t[i] == BD_ET || t[i] == BD_CS) t[i] = BD_ON;
+    for (int i = 0, last = sos; i < n; i++) {   // W7: numbers among Latin text are Latin
+        if (t[i] == BD_L || t[i] == BD_R) last = t[i];
+        else if (t[i] == BD_EN && last == BD_L) t[i] = BD_L;
+    }
+    for (int i = 0; i < n;) {   // N1, N2: spaces and punctuation take the direction around them
+        if (!bd_neutral(t[i])) {
+            i++;
+            continue;
+        }
+        int j = i;
+        while (j < n && bd_neutral(t[j])) j++;
+        int a = i ? (t[i - 1] == BD_L ? BD_L : BD_R) : sos, b = j < n ? (t[j] == BD_L ? BD_L : BD_R) : sos;
+        memset(t + i, a == b ? a : sos, j - i);
+        i = j;
+    }
+    for (int i = 0; i < n; i++)   // I1, I2
+        lv[i] = rtl ? (t[i] == BD_R ? 1 : 2) : (t[i] == BD_L ? 0 : t[i] == BD_R ? 1 : 2);
+    for (int i = n - 1; i >= 0 && (orig[i] == BD_WS || orig[i] == BD_S || orig[i] == BD_B || orig[i] == BD_BN); i--)
+        lv[i] = (uint8_t)rtl;   // L1
+}
+
+// A line split into pieces of one direction, in the order they are seen (left to right). The line is a list of
+// spans: text [s, e) or, with s == NULL, a gap of w pixels (the space between two layout runs).
+typedef struct {
+    const char* s, * e;
+    int w;
+} BSpan;
+typedef struct {
+    const char* s, * e;
+    int span, rtl;
+} BSeg;
+
+#define BIDI_MAX 1024
+
+static int bidi_split(const BSpan* sp, int n_sp, int rtl, BSeg* out, int max) {
+    static uint8_t t[BIDI_MAX], lv[BIDI_MAX];
+    static const char* at[BIDI_MAX + 1];
+    static int16_t of[BIDI_MAX];
+    int n = 0;
+    for (int k = 0; k < n_sp; k++) {
+        if (!sp[k].s) {
+            if (n == BIDI_MAX) return -1;
+            at[n] = NULL, of[n] = (int16_t)k, t[n++] = BD_WS;
+            continue;
+        }
+        for (const char* p = sp[k].s; p < sp[k].e && *p;) {
+            if (n == BIDI_MAX) return -1;
+            at[n] = p, of[n] = (int16_t)k;
+            t[n++] = (uint8_t)bidi_class(utf8_next(&p));
+        }
+    }
+    bidi_levels(t, n, rtl, lv);
+    // runs of one span and one level, in reading order
+    static BSeg seg[BIDI_MAX];
+    static uint8_t seg_lv[BIDI_MAX];
+    int ns = 0;
+    for (int i = 0; i < n;) {
+        int j = i + 1;
+        while (j < n && of[j] == of[i] && lv[j] == lv[i] && at[i]) j++;
+        BSeg* g = &seg[ns];
+        g->span = of[i], g->rtl = lv[i] & 1;
+        g->s = at[i];
+        g->e = !at[i] ? NULL : j < n && of[j] == of[i] ? at[j] : sp[of[i]].e;
+        seg_lv[ns++] = lv[i];
+        i = j;
+    }
+    if (ns > max) return -1;
+    // L2: from the highest level down to the lowest odd one, reverse every run at that level or higher
+    int order[BIDI_MAX], hi = 0, lo_odd = 255;
+    for (int i = 0; i < ns; i++) {
+        order[i] = i;
+        if (seg_lv[i] > hi) hi = seg_lv[i];
+        if ((seg_lv[i] & 1) && seg_lv[i] < lo_odd) lo_odd = seg_lv[i];
+    }
+    for (int l = hi; l >= lo_odd && l > 0; l--)
+        for (int i = 0; i < ns;) {
+            if (seg_lv[order[i]] < l) {
+                i++;
+                continue;
+            }
+            int j = i;
+            while (j < ns && seg_lv[order[j]] >= l) j++;
+            for (int a = i, b = j - 1; a < b; a++, b--) {
+                int x = order[a];
+                order[a] = order[b], order[b] = x;
+            }
+            i = j;
+        }
+    for (int i = 0; i < ns; i++) out[i] = seg[order[i]];
+    return ns;
+}
+
+// One line of mixed-direction text from (x, y): drawn (measure 0) or only measured. Returns the x after it.
+static int bidi_draw(const Font* f, int x, int y, const char* s, const char* e, uint32_t rgb, int measure) {
+    static BSeg seg[BIDI_MAX];
+    BSpan sp = {s, e, 0};
+    int n = bidi_split(&sp, 1, para_rtl(s, e), seg, BIDI_MAX);
+    if (n < 0) return measure ? x + text_width(f, s, e) : draw_ltr(f, x, y, s, e, rgb);
+    for (int i = 0; i < n; i++) {
+        int w = text_width(f, seg[i].s, seg[i].e);
+        if (!measure) {
+            if (seg[i].rtl) draw_rtl(f, x + w, y, seg[i].s, seg[i].e, rgb);
+            else draw_ltr(f, x, y, seg[i].s, seg[i].e, rgb);
+        }
+        x += w;
+    }
+    return x;
+}
 
 // ---- images (PIMG from pc/make_brand.py) ----------------------------------------------------------------------
 
@@ -850,7 +1203,9 @@ static char* format_tables(const char* text) {
     return out;
 }
 
-static void draw_table_line(const char* a, const char* b, int x, int top, int h, int header) {
+// One row (or rule) of a table from x; a right-to-left table (rtl) starts at x_right with its first column and
+// aligns its cells to the right.
+static void draw_table_line(const char* a, const char* b, int x, int top, int h, int header, int rtl, int x_right) {
     char kind = a[1];
     int widths[MAX_COLS], n = 0;
     const char* p = a + 2;
@@ -860,20 +1215,23 @@ static void draw_table_line(const char* a, const char* b, int x, int top, int h,
         p++;
     }
     p++;
-    int xs[MAX_COLS + 1];
-    xs[0] = x;
+    int xs[MAX_COLS + 1];   // column edges, left to right on screen
+    xs[0] = 0;
     for (int i = 0; i < n; i++) xs[i + 1] = xs[i] + widths[i] + 2 * CELL_PAD;
+    int left = rtl ? x_right - xs[n] - 2 : x;
     if (kind != 'R') {
-        fill(xs[0], top, xs[n] - xs[0] + 2, 2, kind == 'M' ? C_ACCENT : C_LINE_HI);
+        fill(left, top, xs[n] + 2, 2, kind == 'M' ? C_ACCENT : C_LINE_HI);
         return;
     }
-    if (header) fill(xs[0], top, xs[n] - xs[0], h, 0x12274C);
-    for (int i = 0; i <= n; i++) fill(xs[i], top, 2, h, C_LINE_HI);
+    if (header) fill(left, top, xs[n], h, 0x12274C);
+    for (int i = 0; i <= n; i++) fill(left + xs[i], top, 2, h, C_LINE_HI);
     const Font* f = header ? &font_bold : &font;
     for (int i = 0; i < n && p <= b; i++) {
         const char* e = p;
         while (e < b && *e != '\x02') e++;
-        draw_text(f, xs[i] + CELL_PAD, top + (h - f->line) / 2, p, e, header ? 0xFFFFFF : C_TEXT);
+        int c = rtl ? n - 1 - i : i, tx = left + xs[c] + CELL_PAD;
+        if (rtl) tx += widths[c] - text_width(f, p, e);
+        draw_text(f, tx, top + (h - f->line) / 2, p, e, header ? 0xFFFFFF : C_TEXT);
         p = e + 1;
     }
 }
@@ -898,11 +1256,13 @@ typedef struct {
     int x, w;
     const char* s, * e;
     uint8_t style;
+    uint8_t rtl;               // right-to-left text, drawn from x + w leftwards
 } Run;
 
 typedef struct {
     int y, h, base;            // top, height, baseline offset
     uint8_t deco, quote, header;
+    uint8_t rtl;               // a right-to-left paragraph: against the right edge, quote bars on that side
     int run0, nrun;
     const char* a, * b;        // table row text
 } Line;
@@ -919,6 +1279,7 @@ struct Layout {
     int n_runs, cap_runs;
     int height, max_w;
     int line_start;            // first run of the line being built
+    int para_rtl;              // the paragraph being laid out reads right to left
 };
 
 #define TEXT_LINE_H (font.line + 7)
@@ -945,7 +1306,48 @@ static void add_run(Layout* L, const Font* f, uint32_t color, int x, int w, cons
         L->runs = realloc(L->runs, L->cap_runs * sizeof(Run));
     }
     Run* r = &L->runs[L->n_runs++];
-    r->f = f, r->color = color, r->x = x, r->w = w, r->s = s, r->e = e, r->style = (uint8_t)style;
+    r->f = f, r->color = color, r->x = x, r->w = w, r->s = s, r->e = e, r->style = (uint8_t)style, r->rtl = 0;
+}
+
+// A line with right-to-left text in reading order: its runs are cut where the direction changes and placed left to
+// right as they are seen (bidi_split). A right-to-left paragraph lies against the right edge, the indent of lists
+// and quotes on that side.
+static void layout_bidi(Layout* L, Line* ln) {
+    int n = ln->nrun, any = ln->rtl;
+    for (int k = 0; k < n && !any; k++) any = has_rtl(L->runs[ln->run0 + k].s, L->runs[ln->run0 + k].e);
+    if (!any || !n || n > 256) return;
+    static Run old[256];
+    static BSpan sp[512];
+    static BSeg seg[BIDI_MAX];
+    static int run_of[512], wseg[BIDI_MAX];
+    memcpy(old, L->runs + ln->run0, n * sizeof(Run));
+    int ns = 0;
+    for (int k = 0; k < n; k++) {
+        int gap = k ? old[k].x - (old[k - 1].x + old[k - 1].w) : 0;
+        if (gap > 0) run_of[ns] = -1, sp[ns++] = (BSpan){NULL, NULL, gap};
+        run_of[ns] = k, sp[ns++] = (BSpan){old[k].s, old[k].e, 0};
+    }
+    int m = bidi_split(sp, ns, ln->rtl, seg, BIDI_MAX), total = 0;
+    if (m < 0) return;
+    for (int i = 0; i < m; i++) {
+        wseg[i] = seg[i].s ? text_width(old[run_of[seg[i].span]].f, seg[i].s, seg[i].e) : sp[seg[i].span].w;
+        total += wseg[i];
+    }
+    if (ln->run0 + m > L->cap_runs) {
+        L->cap_runs = ln->run0 + m + 64;
+        L->runs = realloc(L->runs, L->cap_runs * sizeof(Run));
+    }
+    int x = ln->rtl ? L->width - old[0].x - total : old[0].x;
+    L->n_runs = ln->run0;
+    for (int i = 0; i < m; i++) {
+        if (seg[i].s) {
+            Run* o = &L->runs[L->n_runs++];
+            *o = old[run_of[seg[i].span]];
+            o->x = x, o->w = wseg[i], o->s = seg[i].s, o->e = seg[i].e, o->rtl = (uint8_t)seg[i].rtl;
+        }
+        x += wseg[i];
+    }
+    ln->nrun = L->n_runs - ln->run0;
 }
 
 static Line* end_line(Layout* L, int h, int base, int deco, int quote) {
@@ -957,28 +1359,56 @@ static Line* end_line(Layout* L, int h, int base, int deco, int quote) {
     memset(ln, 0, sizeof(*ln));
     ln->y = L->height, ln->h = h, ln->base = base, ln->deco = (uint8_t)deco, ln->quote = (uint8_t)quote;
     ln->run0 = L->line_start, ln->nrun = L->n_runs - L->line_start;
-    for (int i = ln->run0; i < L->n_runs; i++)
-        if (L->runs[i].x + L->runs[i].w > L->max_w) L->max_w = L->runs[i].x + L->runs[i].w;
+    ln->rtl = (uint8_t)(L->para_rtl && deco == DECO_NONE);
+    if (deco == DECO_NONE || deco == DECO_CODE) layout_bidi(L, ln);
+    for (int i = ln->run0; i < L->n_runs; i++) {   // (a right-to-left line ends at the right edge: its width
+        int w = ln->rtl ? L->width - L->runs[i].x : L->runs[i].x + L->runs[i].w;   // counts from its left end)
+        if (w > L->max_w) L->max_w = w;
+    }
     L->height += h;
     L->line_start = L->n_runs;
     return ln;
 }
 
+// space: a space comes before it; brk: a line may end before it without a space (where Chinese or Japanese text
+// starts or ends); cjk: Chinese or Japanese text, which may break after any character.
 typedef struct {
     const char* s, * e;
-    uint8_t style, space;
+    uint8_t style, space, brk, cjk;
 } Piece;
 
 #define MAX_PIECES 2048
 static Piece pieces[MAX_PIECES];
-static int n_pieces;
+static int n_pieces, piece_brk, piece_cjk;
 
 static void piece(const char* s, const char* e, int style, int* space) {
     if (e <= s || n_pieces == MAX_PIECES) return;
     pieces[n_pieces].s = s, pieces[n_pieces].e = e, pieces[n_pieces].style = (uint8_t)style;
     pieces[n_pieces].space = (uint8_t)*space;
+    pieces[n_pieces].brk = (uint8_t)piece_brk, pieces[n_pieces].cjk = (uint8_t)piece_cjk;
     n_pieces++;
-    *space = 0;
+    *space = 0, piece_brk = 0;
+}
+
+// Chinese and Japanese characters (ideographs, kana, their punctuation, full-width forms): text without spaces,
+// where a line may end after any character. (Korean puts spaces between words.)
+static int cjk_break(uint32_t c) {
+    return (c >= 0x2E80 && c <= 0x312F) || (c >= 0x31F0 && c <= 0x9FFF) || (c >= 0xF900 && c <= 0xFAFF) ||
+           (c >= 0xFE30 && c <= 0xFE4F) || (c >= 0xFF00 && c <= 0xFFEF) || (c >= 0x20000 && c <= 0x3FFFF);
+}
+
+// Closing punctuation, small kana and the prolonged sound mark do not start a line: they stay at the end of the one
+// before, even a little past its edge.
+static int no_line_start(uint32_t c) {
+    static const uint16_t set[] = {')', ']', '}', '.', ',', '!', '?', ':', ';', '%', 0x2019, 0x201D, 0x2025, 0x2026,
+                                   0x3001, 0x3002, 0x3005, 0x3009, 0x300B, 0x300D, 0x300F, 0x3011, 0x3015, 0x3017,
+                                   0x3019, 0x3041, 0x3043, 0x3045, 0x3047, 0x3049, 0x3063, 0x3083, 0x3085, 0x3087,
+                                   0x308E, 0x30A1, 0x30A3, 0x30A5, 0x30A7, 0x30A9, 0x30C3, 0x30E3, 0x30E5, 0x30E7,
+                                   0x30EE, 0x30F5, 0x30F6, 0x30FB, 0x30FC, 0xFF01, 0xFF09, 0xFF0C, 0xFF0E, 0xFF1A,
+                                   0xFF1B, 0xFF1F, 0xFF3D, 0xFF5D};
+    for (size_t i = 0; i < sizeof(set) / sizeof(set[0]); i++)
+        if (set[i] == c) return 1;
+    return 0;
 }
 
 static int is_alnum(char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (uint8_t)c >= 0x80; }
@@ -995,12 +1425,23 @@ static int has_closer(const char* p, const char* b, char c) {
 
 // Splits a[..b) into pieces at spaces and style markers (markers are dropped).
 static void parse_inline(const char* a, const char* b, int plain) {
-    n_pieces = 0;
+    n_pieces = 0, piece_brk = 0, piece_cjk = 0;
     int style = 0, space = 0;
     const char* cur = a;
     const char* p = a;
     while (p < b) {
         char c = *p;
+        if (((uint8_t)c & 0xC0) != 0x80) {   // a character starts: into or out of Chinese / Japanese text?
+            int k = 0;
+            if ((uint8_t)c >= 0xE2) {
+                const char* q = p;
+                k = cjk_break(utf8_next(&q));
+            }
+            if (k != piece_cjk) {
+                piece(cur, p, style, &space);
+                cur = p, piece_cjk = k, piece_brk = 1;
+            }
+        }
         if (c == ' ') {
             piece(cur, p, style, &space);
             while (p < b && *p == ' ') p++;
@@ -1125,11 +1566,33 @@ static void flow(Layout* L, int x_first, int x_cont, int right, int heading, int
     for (int i = 0; i < n_pieces; i++) pw[i] = text_width(style_font(pieces[i].style, heading), pieces[i].s, pieces[i].e);
     for (int i = 0; i < n_pieces;) {
         int j = i + 1;
-        while (j < n_pieces && !pieces[j].space) j++;
+        while (j < n_pieces && !pieces[j].space && !pieces[j].brk) j++;
         int ww = 0;
         for (int k = i; k < j; k++) ww += pw[k];
         int sp = has && pieces[i].space ? base_font->space : 0;
-        if (has && x + sp + ww > right) {
+        if (pieces[i].cjk) {   // Chinese / Japanese: the line may end after any character
+            x += sp;
+            for (int k = i; k < j; k++) {
+                const Font* f = style_font(pieces[k].style, heading);
+                uint32_t col = style_color(L->pal, pieces[k].style, heading, quote);
+                for (const char* c = pieces[k].s; c < pieces[k].e;) {
+                    const char* nx = c;
+                    uint32_t cp = utf8_next(&nx);
+                    int cw = text_width(f, c, nx);
+                    if (has && x + cw > right && !no_line_start(cp)) {
+                        end_line(L, lh, base, DECO_NONE, quote);
+                        x = x_cont, has = 0;
+                    }
+                    add_run(L, f, col, x, cw, c, nx, pieces[k].style);
+                    x += cw, has = 1, c = nx;
+                }
+            }
+            i = j;
+            continue;
+        }
+        int glued = has && !pieces[i].space && pieces[i].brk;   // right after Chinese / Japanese text
+        const char* q = pieces[i].s;
+        if (has && x + sp + ww > right && !(glued && no_line_start(utf8_next(&q)))) {
             end_line(L, lh, base, DECO_NONE, quote);
             x = x_cont, has = 0, sp = 0;
         }
@@ -1180,7 +1643,7 @@ static void layout_build(Layout* L, const char* src, size_t len, int width, cons
     L->src_len = len, L->width = width, L->pal = pal, L->plain = plain;
     L->text = plain ? strdup(src) : format_tables(src);
     L->n_lines = L->n_runs = L->height = L->max_w = L->line_start = 0;
-    int in_code = 0, blank = 0, header = 0;
+    int in_code = 0, blank = 0, header = 0, table_rtl = 0;
     const int code_pad = 24;
     for (const char* s = L->text; *s;) {
         const char* nl = strchr(s, '\n');
@@ -1188,7 +1651,9 @@ static void layout_build(Layout* L, const char* src, size_t len, int width, cons
         const char* t = s;
         int spaces = 0;
         while (t < e && (*t == ' ' || *t == '\t')) spaces += *t == '\t' ? 4 : 1, t++;
+        L->para_rtl = 0;
         if (plain) {
+            L->para_rtl = para_rtl(s, e);
             parse_inline(s, e, 1);
             flow(L, 0, 0, width, 0, 0, NULL);
         } else if (is_fence(t, e)) {
@@ -1222,10 +1687,14 @@ static void layout_build(Layout* L, const char* src, size_t len, int width, cons
             if (e > run_s) add_run(L, &mono, 0xC7E2FF, run_x, x - run_x, run_s, e, 0);
             end_line(L, lh, 2 + mono.ascent, DECO_CODE, 0);
         } else if (*s == '\x01') {   // table row
-            if (s[1] == 'T') header = 1;
+            if (s[1] == 'T') {   // a new table: right to left if most of its text is
+                header = 1;
+                const char* end = strstr(s, "\x01" "B");
+                table_rtl = para_rtl(s, end ? end : s + strlen(s));
+            }
             if (s[1] == 'M') header = 0;
             Line* ln = end_line(L, s[1] == 'R' ? font.line + 16 : 2, 0, DECO_TABLE, 0);
-            ln->a = s, ln->b = e, ln->header = (uint8_t)(header && s[1] == 'R');
+            ln->a = s, ln->b = e, ln->header = (uint8_t)(header && s[1] == 'R'), ln->rtl = (uint8_t)table_rtl;
             if (s[1] == 'B') L->height += 10;
             blank = 0;
         } else if (t == e || (e - t == 1 && *t == '\r')) {   // blank line: paragraph gap
@@ -1277,6 +1746,7 @@ static void layout_build(Layout* L, const char* src, size_t len, int width, cons
                     has_marker = 1;
                 }
             }
+            L->para_rtl = para_rtl(t, e);
             parse_inline(t, e, 0);
             flow(L, x0, x0, width, heading, quote, has_marker ? &marker : NULL);
         }
@@ -1294,7 +1764,9 @@ static Layout* layout_get(Layout** pl, const char* text, size_t len, int width, 
     return L;
 }
 
-static void draw_layout(const Layout* L, int ox, int oy) {
+// Draws the layout with its top-left at (ox, oy); right-to-left lines end at the right edge of a box box_w wide
+// (L->width: the whole width; L->max_w: as wide as the text, as in a speech bubble).
+static void draw_layout_w(const Layout* L, int ox, int oy, int box_w) {
     for (int i = 0; i < L->n_lines; i++) {
         const Line* ln = &L->lines[i];
         int ly = oy + ln->y;
@@ -1308,29 +1780,35 @@ static void draw_layout(const Layout* L, int ox, int oy) {
         }
         if (ly + ln->h < clip_y0) continue;
         if (ln->deco == DECO_HR) fill(ox, ly + ln->h / 2, L->width, 2, C_LINE_HI);
-        if (ln->deco == DECO_TABLE) draw_table_line(ln->a, ln->b, ox, ly, ln->h, ln->header);
-        for (int q = 0; q < ln->quote; q++) rrect(ox + q * QUOTE_INDENT + 4, ly, 4, ln->h, 2, C_ACCENT, 255);
+        if (ln->deco == DECO_TABLE) draw_table_line(ln->a, ln->b, ox, ly, ln->h, ln->header, ln->rtl, ox + box_w);
+        int lx = ln->rtl ? ox + box_w - L->width : ox;
+        for (int q = 0; q < ln->quote; q++)
+            rrect(ln->rtl ? ox + box_w - q * QUOTE_INDENT - 8 : ox + q * QUOTE_INDENT + 4, ly, 4, ln->h, 2, C_ACCENT, 255);
         for (int k = 0; k < ln->nrun; k++) {
             const Run* r = &L->runs[ln->run0 + k];
-            int ty = ly + ln->base - r->f->ascent;
-            if (r->style & ST_CODE) rrect(ox + r->x - 5, ly + ln->base - mono.ascent - 4, r->w + 10, mono.line + 6, 8,
+            int ty = ly + ln->base - r->f->ascent, rx = lx + r->x;
+            if (r->style & ST_CODE) rrect(rx - 5, ly + ln->base - mono.ascent - 4, r->w + 10, mono.line + 6, 8,
                                           L->pal->code_bg, 255);
-            draw_text(r->f, ox + r->x, ty, r->s, r->e, r->color);
-            if (r->style & ST_STRIKE) fill(ox + r->x, ly + ln->base - r->f->ascent / 3, r->w, 2, r->color);
-            if (r->style & ST_LINK) fill(ox + r->x, ly + ln->base + 3, r->w, 1, r->color);
+            if (r->rtl) draw_rtl(r->f, rx + r->w, ty, r->s, r->e, r->color);
+            else draw_ltr(r->f, rx, ty, r->s, r->e, r->color);
+            if (r->style & ST_STRIKE) fill(rx, ly + ln->base - r->f->ascent / 3, r->w, 2, r->color);
+            if (r->style & ST_LINK) fill(rx, ly + ln->base + 3, r->w, 1, r->color);
         }
     }
 }
+static void draw_layout(const Layout* L, int ox, int oy) { draw_layout_w(L, ox, oy, L->width); }
 
-// Where the text ends (for the caret): x after the last run of the last line, and that line's top and height.
-static void layout_end(const Layout* L, int* x, int* y, int* h) {
-    *x = 0, *y = 0, *h = TEXT_LINE_H;
+// Where the text ends (for the caret): the end of the last line (its left end if it reads right to left: *rtl),
+// and that line's top and height.
+static void layout_end(const Layout* L, int* x, int* y, int* h, int* rtl) {
+    *x = 0, *y = 0, *h = TEXT_LINE_H, *rtl = 0;
     if (!L->n_lines) return;
     const Line* ln = &L->lines[L->n_lines - 1];
-    *y = ln->y, *h = ln->h;
-    if (ln->nrun) {
-        const Run* r = &L->runs[ln->run0 + ln->nrun - 1];
-        *x = r->x + r->w;
+    *y = ln->y, *h = ln->h, *rtl = ln->rtl;
+    if (ln->rtl) *x = L->width;
+    for (int k = 0; k < ln->nrun; k++) {
+        const Run* r = &L->runs[ln->run0 + k];
+        if (ln->rtl ? r->x < *x : r->x + r->w > *x) *x = ln->rtl ? r->x : r->x + r->w;
     }
 }
 
@@ -1483,16 +1961,18 @@ static void draw_thinking(const ChatView* v, int x, int y, int w) {
     static Layout* lay;
     static char tail[THINK_TAIL + 3200];
     int cy = y + 24;   // level with the logo next to the reply
+    int r = lang_rtl(ui_lang);   // (right to left: the label on the right, the counts on the left)
     float a = 0.5f + 0.5f * sinf((float)v->time * 6.0f);
-    circle(x + 8, cy, 7, 0, C_ACCENT_HI, (int)(110 + 145 * a));
-    draw_str(&font, x + 28, cy - font.line / 2, tr(S_THINKING), C_ACCENT_HI);
+    const char* label = tr(S_THINKING);
+    circle(r ? x + w - 8 : x + 8, cy, 7, 0, C_ACCENT_HI, (int)(110 + 145 * a));
+    draw_str(&font, r ? x + w - 28 - str_width(&font, label) : x + 28, cy - font.line / 2, label, C_ACCENT_HI);
     char s[64];
     snprintf(s, sizeof(s), "%d / %d  ·  %d s", v->think_n, v->think_cap, (int)v->think_s);
-    draw_str(&font_small, x + w - str_width(&font_small, s), cy - font_small.line / 2, s, C_TEXT_MUTED);
+    draw_str(&font_small, r ? x : x + w - str_width(&font_small, s), cy - font_small.line / 2, s, C_TEXT_MUTED);
     int by = y + THINK_HEAD_H - 4, n = v->think_n < v->think_cap ? v->think_n : v->think_cap;
     rrect(x, by, w, 4, 2, 0x1B3156, 255);
     int fw = v->think_cap > 0 ? (int)((long long)w * n / v->think_cap) : 0;
-    if (fw > 0) rrect(x, by, fw < 4 ? 4 : fw, 4, 2, C_ACCENT_HI, 255);
+    if (fw > 0) rrect(r ? x + w - (fw < 4 ? 4 : fw) : x, by, fw < 4 ? 4 : fw, 4, 2, C_ACCENT_HI, 255);
     int py = y + THINK_HEAD_H + 8, ph = 2 * THINK_PAD + THINK_LINES * TEXT_LINE_H - 8;
     rrect(x, py, w, ph, 18, C_SURFACE, 210);
     rrect_line(x, py, w, ph, 18, 1, C_LINE, 255);
@@ -1538,12 +2018,13 @@ static void draw_thinking(const ChatView* v, int x, int y, int w) {
     }
 }
 
-static void draw_thought(const Msg* m, int x, int y) {
+static void draw_thought(const Msg* m, int x, int y, int w) {   // (right to left: on the right of the reply)
     char s[96];
     int n = snprintf(s, sizeof(s), tr(S_THOUGHT), (int)(m->think_s + 0.5f), m->think_n);
     if (m->think_cut && n > 0 && n < (int)sizeof(s)) snprintf(s + n, sizeof(s) - n, " · %s", tr(S_THINK_CUT));
-    circle(x + 6, y + font_small.line / 2, 5, 0, C_ACCENT, 255);
-    draw_str(&font_small, x + 20, y, s, C_TEXT_MUTED);
+    int r = lang_rtl(ui_lang);
+    circle(r ? x + w - 6 : x + 6, y + font_small.line / 2, 5, 0, C_ACCENT, 255);
+    draw_str(&font_small, r ? x + w - 20 - str_width(&font_small, s) : x + 20, y, s, C_TEXT_MUTED);
 }
 
 static int msg_height(Msg* m, int typing) {
@@ -1629,12 +2110,12 @@ void draw_chat(ChatView* v) {
                     int bx = COL_X + COL_W - bw;
                     int rad[4] = {26, 26, 8, 26};
                     rrect4(bx, y, bw, h, rad, 0, C_USER, 255);
-                    draw_layout(L, bx + BUB_PAD_X, y + BUB_PAD_Y);
+                    draw_layout_w(L, bx + BUB_PAD_X, y + BUB_PAD_Y, L->max_w);
                 } else if (m->who == MSG_NOTE) {
                     int nx = (SCREEN_W - L->max_w) / 2;
                     fill(COL_X + 120, y + h / 2, nx - COL_X - 150, 1, C_LINE);
                     fill(nx + L->max_w + 30, y + h / 2, COL_X + COL_W - 120 - nx - L->max_w - 30, 1, C_LINE);
-                    draw_layout(L, nx, y + 4);
+                    draw_layout_w(L, nx, y + 4, L->max_w);
                 } else {
                     circle(COL_X + 28, y + 28, 28, 0, 0x10244A, 255);
                     circle(COL_X + 28, y + 28, 28, 1.2f, C_LINE_HI, 255);
@@ -1645,7 +2126,7 @@ void draw_chat(ChatView* v) {
                         y += h + MSG_GAP;
                         continue;
                     }
-                    if (m->think_n) draw_thought(m, tx, ty), ty += think_label_h();
+                    if (m->think_n) draw_thought(m, tx, ty, COL_W - AI_INDENT), ty += think_label_h();
                     draw_layout(L, tx, ty);
                     if (typing_last && i == n_msgs - 1) {
                         if (!L->n_lines || !L->n_runs) {   // nothing written yet: three bouncing dots
@@ -1655,10 +2136,10 @@ void draw_chat(ChatView* v) {
                                 circle(tx + 10 + k * 26, ty + 24 - 5 * (0.5f + 0.5f * sinf(ph)), 7, 0, C_ACCENT_HI, (int)(255 * a));
                             }
                         } else {
-                            int ex, ey, eh;
-                            layout_end(L, &ex, &ey, &eh);
+                            int ex, ey, eh, er;
+                            layout_end(L, &ex, &ey, &eh, &er);
                             float a = 0.5f + 0.5f * sinf((float)v->time * 7.0f);
-                            circle(tx + ex + 14, ty + ey + eh / 2, 7, 0, C_ACCENT_HI, (int)(90 + 165 * a));
+                            circle(tx + ex + (er ? -14 : 14), ty + ey + eh / 2, 7, 0, C_ACCENT_HI, (int)(90 + 165 * a));
                         }
                     }
                 }
@@ -1746,7 +2227,7 @@ void draw_error(const char* what) {
     draw_center(&font_big, cx, y, tr(S_ERROR_TITLE), C_RED);
     static Layout* L;
     Layout* l = layout_get(&L, what, strlen(what), 1200, &PAL_AI, 1);
-    draw_layout(l, cx - l->max_w / 2, y + font_big.line + 20);
+    draw_layout_w(l, cx - l->max_w / 2, y + font_big.line + 20, l->max_w);
     draw_center(&font_small, cx, y + font_big.line + 40 + l->height, tr(S_ERROR_HINT), C_TEXT_MUTED);
 }
 
@@ -1910,9 +2391,11 @@ static void draw_field(int x, int y, int w, const char* text, double time) {
     int pad = 28, inner_w = w - 2 * pad;
     int caret_x, caret_y, caret_h;
     int blink = fmod(time, 1.0) < 0.6;
-    if (!text[0]) {
-        draw_str(&font, x + pad, y + (FIELD_H - font.line) / 2, tr(S_PLACEHOLDER), C_TEXT_MUTED);
-        if (blink) rrect(x + pad - 4, y + (FIELD_H - 36) / 2, 3, 36, 1, C_ACCENT_HI, 255);
+    if (!text[0]) {   // (in a right-to-left language the empty field starts at its right edge)
+        int r = lang_rtl(ui_lang);
+        const char* ph = tr(S_PLACEHOLDER);
+        draw_str(&font, r ? x + w - pad - str_width(&font, ph) : x + pad, y + (FIELD_H - font.line) / 2, ph, C_TEXT_MUTED);
+        if (blink) rrect(r ? x + w - pad + 1 : x + pad - 4, y + (FIELD_H - 36) / 2, 3, 36, 1, C_ACCENT_HI, 255);
         return;
     }
     static Layout* L;
@@ -1921,10 +2404,11 @@ static void draw_field(int x, int y, int w, const char* text, double time) {
     int oy = y + 10 + (l->height <= area ? (area - l->height) / 2 : area - l->height);   // keep the end in view
     set_clip(x + 4, y + 4, x + w - 4, y + FIELD_H - 4);
     draw_layout(l, x + pad, oy);
-    layout_end(l, &caret_x, &caret_y, &caret_h);
+    int rtl;
+    layout_end(l, &caret_x, &caret_y, &caret_h, &rtl);
     size_t n = strlen(text);
-    for (size_t i = n; i > 0 && text[i - 1] == ' '; i--) caret_x += font.space;   // trailing spaces
-    if (blink) rrect(x + pad + caret_x + 2, oy + caret_y + (caret_h - 36) / 2, 3, 36, 1, C_ACCENT_HI, 255);
+    for (size_t i = n; i > 0 && text[i - 1] == ' '; i--) caret_x += rtl ? -font.space : font.space;   // trailing spaces
+    if (blink) rrect(x + pad + caret_x + (rtl ? -5 : 2), oy + caret_y + (caret_h - 36) / 2, 3, 36, 1, C_ACCENT_HI, 255);
     no_clip();
 }
 
