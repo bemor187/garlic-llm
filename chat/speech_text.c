@@ -53,15 +53,17 @@ static int uni_end(const char* text, int len, int i) {
     if (i + 2 < len && ((t[i] == 0xE3 && t[i + 1] == 0x80 && t[i + 2] == 0x82) ||
                         (t[i] == 0xEF && t[i + 1] == 0xBC && (t[i + 2] == 0x81 || t[i + 2] == 0x9F)))) {
         j = i + 3;
+        int quote = 0;
         for (;;) {   // closing brackets and more marks: 」』）！？。 . ! ? " ' ) ]
-            if (j < len && strchr(".!?\"')]*", text[j])) j++;
+            if (j < len && strchr(".!?\"')]*", text[j])) quote |= text[j] == '"' || text[j] == ')', j++;
             else if (j + 2 < len && ((t[j] == 0xE3 && t[j + 1] == 0x80 && (t[j + 2] == 0x8D || t[j + 2] == 0x8F ||
                                                                          t[j + 2] == 0x82)) ||
                                      (t[j] == 0xEF && t[j + 1] == 0xBC &&
                                       (t[j + 2] == 0x89 || t[j + 2] == 0x81 || t[j + 2] == 0x9F))))
-                j += 3;
+                quote |= t[j + 2] == 0x8D || t[j + 2] == 0x8F || t[j + 2] == 0x89, j += 3;
             else break;
         }
+        if (quote && cjk_kind(text + j, len - j) == 1) return 0;   // 「すごい！」と言った: the sentence goes on
         if (j < len && (text[j] == ' ' || text[j] == '\n')) j++;
         return j;
     }

@@ -256,10 +256,12 @@ static int tts_piece_end(const Msg* m, int* cut) {
 #define TTS_MIN_S 6.0
 static int tts_join_fluent(const Msg* m, int start, int end);
 
-// st_next_piece ended the piece at a space, not after punctuation (or, in Japanese, between two characters)
+// st_next_piece ended the piece at a space, not after punctuation (or, in Japanese, between two characters that are
+// not Japanese punctuation: 、。」！？ end a piece where a sentence or a clause does)
 static int hard_cut_at(const char* t, int q, int end) {
-    if (end > q + 3 && (uint8_t)t[end - 3] == 0xE3 && (uint8_t)t[end] >= 0xE3 && (uint8_t)t[end] <= 0xE9)
-        return !((uint8_t)t[end - 2] == 0x80 && ((uint8_t)t[end - 1] == 0x81 || (uint8_t)t[end - 1] == 0x82));   // 、。
+    const uint8_t* u = (const uint8_t*)t;
+    if (end > q + 3 && u[end] >= 0xE3 && u[end] <= 0xE9 && (u[end - 3] & 0xF0) == 0xE0)
+        return !((u[end - 3] == 0xE3 && u[end - 2] == 0x80) || (u[end - 3] == 0xEF && u[end - 2] == 0xBC));
     return end > q + 1 && t[end - 1] == ' ' && !strchr(".!?,;:\"')]*", t[end - 2]) && (uint8_t)t[end - 2] != 0xA6;
 }
 
