@@ -106,49 +106,60 @@ def chunk_mask(T):
     return (diff >= 0) & (diff <= LEFT_CHUNKS)
 
 
-def encoder(feat, w):
-    E = "encoder."
-    x = subsampling(feat, w)
+def encoder_layer(x, w, i, tap=None):
+    """Conformer block i on x [T, 1024]. tap(name, X), if given, sees the input X of each matrix product."""
+    tap = tap or (lambda name, X: None)
     T = len(x)
     H, D = 8, 128
     mask = chunk_mask(T)
-    dist = np.arange(T)[:, None] - np.arange(T)[None, :]
-    didx = np.clip(dist - D_MIN, 0, N_DIST - 1)
+    didx = np.clip(np.arange(T)[:, None] - np.arange(T)[None, :] - D_MIN, 0, N_DIST - 1)
+    p = f"encoder.layers.{i}."
+    L = lambda n: (w[p + n + ".weight"], w[p + n + ".bias"])
+    h = layer_norm(x, *L("norm_feed_forward1"))
+    tap("ff1.1", h)
+    h = silu(h @ w[p + "feed_forward1.linear1.weight"].T)
+    tap("ff1.2", h)
+    x = x + 0.5 * (h @ w[p + "feed_forward1.linear2.weight"].T)
+    h = layer_norm(x, *L("norm_self_att"))
+    tap("qkv", h)
+    a = p + "self_attn."
+    q = (h @ w[a + "q_proj.weight"].T).reshape(T, H, D).transpose(1, 0, 2)
+    k = (h @ w[a + "k_proj.weight"].T).reshape(T, H, D).transpose(1, 0, 2)
+    v = (h @ w[a + "v_proj.weight"].T).reshape(T, H, D).transpose(1, 0, 2)
+    R = w[a + "rel_table"].reshape(N_DIST, H, D).transpose(1, 0, 2)                             # [H, N_DIST, D]
+    qu = q + w[a + "bias_u"][:, None, :]
+    qv = q + w[a + "bias_v"][:, None, :]
+    bd = np.take_along_axis(qv @ R.transpose(0, 2, 1), np.broadcast_to(didx, (H, T, T)), axis=2)
+    s = (qu @ k.transpose(0, 2, 1) + bd) / np.sqrt(D)
+    s = np.where(mask, s, -np.inf)
+    s = np.exp(s - s.max(-1, keepdims=True))
+    s /= s.sum(-1, keepdims=True)
+    o = (s @ v).transpose(1, 0, 2).reshape(T, H * D)
+    tap("o", o)
+    x = x + o @ w[a + "o_proj.weight"].T
+    h = layer_norm(x, *L("norm_conv"))
+    tap("pw1", h)
+    c = p + "conv."
+    h = h @ w[c + "pointwise_conv1.weight"][:, :, 0].T              # [T, 2048]
+    h = h[:, :1024] / (1 + np.exp(-h[:, 1024:]))                   # GLU
+    dw = w[c + "depthwise_conv.weight"][:, 0, :]                   # [1024, 9]
+    hp = np.pad(h, ((8, 0), (0, 0)))                               # causal: 8 frames of left context
+    h = sum(hp[j:j + T] * dw[:, j] for j in range(9))
+    h = silu(layer_norm(h, w[c + "norm.weight"], w[c + "norm.bias"]))
+    tap("pw2", h)
+    x = x + h @ w[c + "pointwise_conv2.weight"][:, :, 0].T
+    h = layer_norm(x, *L("norm_feed_forward2"))
+    tap("ff2.1", h)
+    h = silu(h @ w[p + "feed_forward2.linear1.weight"].T)
+    tap("ff2.2", h)
+    x = x + 0.5 * (h @ w[p + "feed_forward2.linear2.weight"].T)
+    return layer_norm(x, *L("norm_out"))
+
+
+def encoder(feat, w):
+    x = subsampling(feat, w)
     for i in range(24):
-        p = f"{E}layers.{i}."
-        L = lambda n: (w[p + n + ".weight"], w[p + n + ".bias"])
-        h = layer_norm(x, *L("norm_feed_forward1"))
-        h = silu(h @ w[p + "feed_forward1.linear1.weight"].T) @ w[p + "feed_forward1.linear2.weight"].T
-        x = x + 0.5 * h
-        h = layer_norm(x, *L("norm_self_att"))
-        a = p + "self_attn."
-        q = (h @ w[a + "q_proj.weight"].T).reshape(T, H, D).transpose(1, 0, 2)
-        k = (h @ w[a + "k_proj.weight"].T).reshape(T, H, D).transpose(1, 0, 2)
-        v = (h @ w[a + "v_proj.weight"].T).reshape(T, H, D).transpose(1, 0, 2)
-        R = w[a + "rel_table"].reshape(N_DIST, H, D).transpose(1, 0, 2)                         # [H, N_DIST, D]
-        qu = q + w[a + "bias_u"][:, None, :]
-        qv = q + w[a + "bias_v"][:, None, :]
-        bd = np.take_along_axis(qv @ R.transpose(0, 2, 1), np.broadcast_to(didx, (H, T, T)), axis=2)
-        s = (qu @ k.transpose(0, 2, 1) + bd) / np.sqrt(D)
-        s = np.where(mask, s, -np.inf)
-        s = np.exp(s - s.max(-1, keepdims=True))
-        s /= s.sum(-1, keepdims=True)
-        o = (s @ v).transpose(1, 0, 2).reshape(T, H * D)
-        x = x + o @ w[a + "o_proj.weight"].T
-        h = layer_norm(x, *L("norm_conv"))
-        c = p + "conv."
-        h = h @ w[c + "pointwise_conv1.weight"][:, :, 0].T          # [T, 2048]
-        h = h[:, :1024] / (1 + np.exp(-h[:, 1024:]))               # GLU
-        dw = w[c + "depthwise_conv.weight"][:, 0, :]               # [1024, 9]
-        hp = np.pad(h, ((8, 0), (0, 0)))                           # causal: 8 frames of left context
-        h = sum(hp[j:j + T] * dw[:, j] for j in range(9))
-        h = layer_norm(h, w[c + "norm.weight"], w[c + "norm.bias"])
-        h = silu(h) @ w[c + "pointwise_conv2.weight"][:, :, 0].T
-        x = x + h
-        h = layer_norm(x, *L("norm_feed_forward2"))
-        h = silu(h @ w[p + "feed_forward2.linear1.weight"].T) @ w[p + "feed_forward2.linear2.weight"].T
-        x = x + 0.5 * h
-        x = layer_norm(x, *L("norm_out"))
+        x = encoder_layer(x, w, i)
     return x.astype(np.float32)
 
 

@@ -41,6 +41,7 @@ The copyright notices of the fonts, their reserved names and the full text of th
 
 - The 4-bit attention cache follows *TurboQuant: Online Vector Quantization with Near-optimal Distortion Rate* (Zandieh et al., arXiv:2504.19874).
 - Speculative decoding uses the multi-token prediction (MTP) head that ships with Qwen3.5.
+- Nemotron 3.5 ASR's 4-bit weights are rounded with *GPTQ: Accurate Post-Training Quantization for Generative Pre-trained Transformers* (Frantar et al., arXiv:2210.17323), calibrated on sentences of the dev split of [FLEURS](https://huggingface.co/datasets/google/fleurs) (Google, CC-BY 4.0).
 
 ## Tools
 

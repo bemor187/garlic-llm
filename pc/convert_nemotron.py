@@ -1,8 +1,10 @@
 """Convert Nemotron 3.5 ASR (models/nemotron-3.5-asr-streaming-0.6b/model.safetensors) to the PS4 format of
 convert_parakeet.py: one file, tensors on 256-byte boundaries, index in models/<name>.json.
 
-  q4i   all big matrices (shaders/parakeet.cl: mm_q4i), rows padded to a multiple of 64; each block's scale is
-        the one with the least squared error (q4.quantize_q4_mse), which loses less than the peak on this model
+  q4i   all big matrices (shaders/parakeet.cl: mm_q4i), rows padded to a multiple of 64. The encoder's and the
+        prompt projector's come already rounded by gptq_nemotron.py (--rounded): rounded to nearest, Japanese and
+        Chinese lose about half again as many characters. The rest are rounded to nearest, each block's scale the
+        one with the least squared error (q4.quantize_q4_mse).
   q8i   the joint head (shaders/nemotron.cl: mm_q8i): in 4 bits alone it raises the word errors by half
   f16   per layer, the positional rows of the 83 relative distances the chunked attention uses (nemotron_ref.py:
         rel_table), so linear_pos is not needed on the console; the prompt projector's bias for each of the 128
@@ -12,7 +14,8 @@ convert_parakeet.py: one file, tensors on 256-byte boundaries, index in models/<
 
 The file stays smaller than Parakeet's (the same memory on the console).
 
-Run: python convert_nemotron.py            -> models/nemotron-3.5-asr-q4i.bin + .json
+Run: python convert_nemotron.py --rounded   -> models/nemotron-3.5-asr-q4i.bin + .json (--rounded: with
+                                             models/nemotron-gptq.npz, or the file named after it)
      python convert_nemotron.py --assets   -> chat/assets/asr_nm.idx + asr_nm_vocab.bin (from the .json)
 """
 
@@ -51,8 +54,11 @@ def interleave_q8(q, d16):
     return np.ascontiguousarray(nib).tobytes(), np.ascontiguousarray(sc).tobytes()
 
 
-def main():
+def main(rounded=None):
+    """rounded: an .npz of matrices already on the q4i grid ("<tensor>|packed", "<tensor>|d16", as gptq_nemotron.py
+    writes them), used instead of rounding those to nearest"""
     w = N.prepare(N.load_weights())
+    pre = np.load(rounded) if rounded else {}
     out = open(ROOT / "models" / f"{NAME}.bin", "wb")
     index, offset = {}, 0
 
@@ -78,7 +84,13 @@ def main():
         rows = m.shape[0]
         if rows % 64:
             m = np.concatenate([m, np.zeros((64 - rows % 64, m.shape[1]), np.float32)])
-        nib, sc = interleave_q8(*quantize_q8(m)) if bits == 8 else interleave_q4(*quantize_q4_mse(m))
+        if bits == 8:
+            nib, sc = interleave_q8(*quantize_q8(m))
+        elif f"{key}|packed" in pre:
+            assert pre[f"{key}|packed"].shape == (m.shape[0], m.shape[1] // 2), key
+            nib, sc = interleave_q4(pre[f"{key}|packed"], pre[f"{key}|d16"])
+        else:
+            nib, sc = interleave_q4(*quantize_q4_mse(m))
         put(key, nib + sc, rows=m.shape[0], cols=m.shape[1], scales=len(nib), fmt=f"q{bits}i", true_rows=rows)
 
     S = "encoder.subsampling."
@@ -215,4 +227,5 @@ if __name__ == "__main__":
         rest = [a for a in sys.argv[1:] if a != "--assets"]
         export_app_assets(*rest)
     else:
-        main()
+        k = sys.argv.index("--rounded") if "--rounded" in sys.argv else -1
+        main(None if k < 0 else sys.argv[k + 1] if k + 1 < len(sys.argv) else ROOT / "models" / "nemotron-gptq.npz")
