@@ -38,6 +38,10 @@ A build of this branch with the abliterated 9B weights inside produced:
 |---|---:|---|
 | `IV0000-PSAI00001_00-PS4LOCALAICHAT01.pkg` | 4,898,750,464 | `c8b39cf2908f1f3d4ebc971ad8aeec854d4a8f495bdce8b0539572f9317b836e` |
 
+Public download: https://huggingface.co/bemor187/darkgarlic-llm-ps4
+
+Direct file: https://huggingface.co/bemor187/darkgarlic-llm-ps4/resolve/main/DarkGarlic-LLM-1.20-full.pkg
+
 That file is too large for a GitHub release. The release asset `DarkGarlic-LLM-1.20.pkg` (41,091,072 bytes, SHA-256 `0354ce449ba522d4c590f0c781e0f877eaa2246c88ee227ec4831c5e1379af32`) is the same app with no weights, for people who upload the bins to `/data` themselves.
 
 Title `DarkGarlic LLM`, version 1.20, title id `PSAI00001`. Install from an exFAT USB drive with *Settings → Debug Settings → Game → Package Installer* on a console that already runs GoldHEN. The all-in-one package needs about 10 GB free if the console copies it to the internal disk before installing.
