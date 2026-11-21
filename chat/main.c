@@ -1957,6 +1957,7 @@ int main(void) {
     uint32_t prev = 0;
     int scroll_held = 0;
     for (;;) {
+        api_console_busy(generating);   // (for GET /health; the modes below that keep the model say so before)
         ApiJob* api_job_now = !generating && !in_voice_mode ? api_take() : NULL;
         if (api_job_now) {   // an API request: the model answers it now, the chat waits
             api_job(api_job_now);
@@ -1972,18 +1973,22 @@ int main(void) {
         } else if (pressed & (ORBIS_PAD_BUTTON_CROSS | ORBIS_PAD_BUTTON_OPTIONS)) {
             static char text[2048];
             int cross = (pressed & ORBIS_PAD_BUTTON_CROSS) != 0;
+            api_console_busy(1);
             if (cross ? keyboard(text, 1500, 0) : ask_user(text, sizeof(text))) {
                 say("user wrote %d bytes", (int)strlen(text));
                 start_turn(text);
             }
             prev = read_buttons();
         } else if (pressed & ORBIS_PAD_BUTTON_L1) {
+            api_console_busy(1);
             voice_mode();
             prev = read_buttons();
         } else if ((pressed & ORBIS_PAD_BUTTON_R1) && code_msg() >= 0) {
+            api_console_busy(1);
             run_python();
             prev = read_buttons();
         } else if (pressed & ORBIS_PAD_BUTTON_SQUARE) {
+            api_console_busy(1);
             push_to_talk();
             prev = read_buttons();
         } else if (pressed & ORBIS_PAD_BUTTON_TRIANGLE) {

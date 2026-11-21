@@ -109,6 +109,7 @@ curl http://192.168.1.5:8080/v1/chat/completions \
 ```
 
 - `GET /v1/models`, `POST /v1/chat/completions` (`stream: true` for server-sent events), `GET /health`.
+- `GET /health` also says whether a request sent now would wait, for clients that can send it elsewhere: `{"status":"ok","busy":false,"waiting":0}`. `busy` is `true` while a request is being answered or the console itself uses the model (a chat reply, the keyboard, voice mode, dictation, a Python program); `waiting` counts the requests in line. It needs no API key.
 - The OpenAPI 3.1 description is at `GET /openapi.json` (also in [`chat/assets/openapi.json`](chat/assets/openapi.json)).
 - Replies are generated the way the chat generates its own, speculative decoding included.
 - One request runs at a time, and the chat screen is busy while it does: it says that a request is being answered, and ○ stops the reply (the client gets what was written so far, with `finish_reason: "length"`). Requests wait while the keyboard, voice mode or a Python program is open. Chat requests sent meanwhile wait their turn, up to 8 in all (more get `503` with the code `busy`); `/v1/models` and `/health` answer at once.

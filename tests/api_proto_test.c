@@ -258,6 +258,15 @@ static void test_writers(void) {
     sb_free(&s);
 
     sb_init(&s);
+    api_json_health(&s, 1, 2);
+    CHECK(!strcmp(s.p, "{\"status\":\"ok\",\"busy\":true,\"waiting\":2}"));
+    sb_free(&s);
+    sb_init(&s);
+    api_json_health(&s, 0, 0);
+    CHECK(!strcmp(s.p, "{\"status\":\"ok\",\"busy\":false,\"waiting\":0}"));
+    sb_free(&s);
+
+    sb_init(&s);
     api_json_models(&s, "Qwen3.5-9B", 0);
     CHECK(strstr(s.p, "\"data\":[{\"id\":\"Qwen3.5-9B\",\"object\":\"model\"") != NULL);
     sb_free(&s);

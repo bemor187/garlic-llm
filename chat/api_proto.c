@@ -514,6 +514,14 @@ void api_json_models(Sb* out, const char* model, long long created) {
     sb_str(out, ",\"owned_by\":\"garlic-llm\"}]}");
 }
 
+void api_json_health(Sb* out, int busy, int waiting) {
+    sb_str(out, "{\"status\":\"ok\",\"busy\":");
+    sb_str(out, busy ? "true" : "false");
+    sb_str(out, ",\"waiting\":");
+    sb_int(out, waiting > 0 ? waiting : 0);
+    sb_str(out, "}");
+}
+
 void api_json_completion(Sb* out, const char* id, const char* model, long long created, const char* reasoning,
                          size_t rlen, const char* text, size_t tlen, const ApiToolCall* calls, int n_calls,
                          const char* finish, int prompt_tokens, int completion_tokens, int reasoning_tokens) {

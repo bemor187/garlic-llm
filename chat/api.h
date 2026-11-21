@@ -32,6 +32,9 @@ void api_done(ApiJob* job);
 int api_send(int fd, const char* p, size_t n);
 // 1 if the client has closed fd (a request that waited and is no longer wanted), without waiting.
 int api_client_gone(int fd);
+// Main thread: whether the console itself is using the model (a chat reply, the keyboard, voice mode, dictation,
+// a Python program), so a request would wait. GET /health reports it, with the requests in line.
+void api_console_busy(int busy);
 // The model's name as the API reports it.
 void api_set_model(const char* name);
 const char* api_model(void);

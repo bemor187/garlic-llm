@@ -49,6 +49,8 @@ _Static_assert(sizeof(ApiSockaddrIn) == sizeof(OrbisNetSockaddr), "sockaddr size
 static OrbisPthreadMutex api_mu;
 static ApiJob *queue_head, *queue_tail;   // waiting for the main loop, oldest first
 static int jobs;                // chat jobs queued or being answered (api_done counts one off)
+static int answering;           // the main loop is answering one of them (api_take to api_done)
+static volatile int console_busy;   // the console itself is using the model (api_console_busy)
 static char model_name[64] = "Garlic";
 static char* key;               // the API key, or NULL
 static OrbisPthread api_th;
@@ -105,6 +107,7 @@ ApiJob* api_take(void) {
         queue_head = j->next;
         if (!queue_head) queue_tail = NULL;
         j->next = NULL;
+        answering = 1;
     }
     scePthreadMutexUnlock(&api_mu);
     return j;
@@ -116,7 +119,26 @@ void api_done(ApiJob* job) {
     free(job);
     scePthreadMutexLock(&api_mu);
     jobs--;
+    answering = 0;
     scePthreadMutexUnlock(&api_mu);
+}
+
+void api_console_busy(int busy) { console_busy = busy; }
+
+// GET /health: up, and whether a request sent now would wait (the model is answering one, or the console uses it).
+static void reply_health(int fd) {
+    int waiting = 0, busy = console_busy;
+    if (ready) {
+        scePthreadMutexLock(&api_mu);
+        waiting = jobs - answering;
+        busy |= answering || waiting > 0;
+        scePthreadMutexUnlock(&api_mu);
+    }
+    Sb s;
+    sb_init(&s);
+    api_json_health(&s, busy, waiting);
+    reply(fd, 200, "OK", "application/json", s.p, s.n);
+    sb_free(&s);
 }
 
 // the header value of Authorization must be "Bearer <key>"
@@ -221,6 +243,8 @@ static int handle(int fd) {
                         "Access-Control-Allow-Headers: Authorization, Content-Type\r\n"
                         "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         api_send(fd, h, strlen(h));
+    } else if (!strcmp(req.method, "GET") && !strcmp(req.path, "/health")) {   // (no key needed, as documented)
+        reply_health(fd);
     } else if (!authorized(&req)) {
         reply_json_error(fd, 401, "Unauthorized", "Missing or wrong API key.", "invalid_request_error",
                          "invalid_api_key");
@@ -230,8 +254,6 @@ static int handle(int fd) {
         api_json_models(&s, model_name, 0);
         reply(fd, 200, "OK", "application/json", s.p, s.n);
         sb_free(&s);
-    } else if (!strcmp(req.method, "GET") && !strcmp(req.path, "/health")) {
-        reply(fd, 200, "OK", "application/json", "{\"status\":\"ok\"}", 15);
     } else if (!strcmp(req.method, "GET") && (!strcmp(req.path, "/openapi.json") || !strcmp(req.path, "/"))) {
         size_t n = 0;
         uint8_t* spec = read_all(API_ASSETS "/openapi.json", &n);

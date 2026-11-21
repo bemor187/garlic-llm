@@ -90,6 +90,9 @@ void api_free_tool_calls(ApiToolCall* calls, int n);
 // ---- JSON writers used by the API ------------------------------------------------------------------------------------
 // The JSON of GET /v1/models: one model, the one loaded.
 void api_json_models(Sb* out, const char* model, long long created);
+// The JSON of GET /health: {"status":"ok","busy":..,"waiting":..}. busy: a request sent now would wait (the model is
+// answering one, or the console is using it); waiting: requests in line besides the one being answered.
+void api_json_health(Sb* out, int busy, int waiting);
 // A complete chat.completion (non-streaming). The reasoning (rlen > 0) goes in message.reasoning_content, and its
 // tokens, which completion_tokens includes, in usage.completion_tokens_details.reasoning_tokens. With tool calls
 // (n_calls > 0) the message carries tool_calls, and its content is null when there is no text besides them.

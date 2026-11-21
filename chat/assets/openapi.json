@@ -78,14 +78,22 @@
       "get": {
         "tags": ["System"],
         "operationId": "health",
-        "summary": "Check that the server is up",
+        "summary": "Check that the server is up, and whether it is busy",
         "security": [],
         "responses": {
           "200": {
             "description": "The server is running.",
             "content": {
               "application/json": {
-                "schema": { "type": "object", "properties": { "status": { "type": "string", "const": "ok" } } }
+                "schema": {
+                  "type": "object",
+                  "required": ["status", "busy", "waiting"],
+                  "properties": {
+                    "status": { "type": "string", "const": "ok" },
+                    "busy": { "type": "boolean", "description": "A request sent now would wait: one is being answered, or the console itself uses the model (a chat reply, the keyboard, voice mode, dictation, a Python program)." },
+                    "waiting": { "type": "integer", "minimum": 0, "description": "Chat requests in line, besides the one being answered." }
+                  }
+                }
               }
             }
           }
