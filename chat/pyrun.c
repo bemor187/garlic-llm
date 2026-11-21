@@ -426,7 +426,7 @@ static int exec_source(const char* src, size_t len, const char* name) {
 const char* py_error(void) { return err; }
 
 int py_run(const PyHost* host, const char* source, const char* name) {
-    // The heap: 64 MiB if the system RAM has it, else less: Parakeet's dictation weights (338 MiB) live in that
+    // The heap: 64 MiB if the system RAM has it, else less: the dictation weights (338 MiB) live in that
     // RAM, so 64 MiB are not always free.
     static char* heap;
     static size_t heap_size;
