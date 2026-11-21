@@ -23,8 +23,24 @@ typedef struct {
     int qwen35, ctx_limit;
     uint32_t eos, eos2;
     char error[160];
+    struct {
+        uint64_t ws_begin, ws_end;   // the dictation's work memory (0, 0: none, so the API keeps no state)
+    } asr;
 } MockEngine;
-static MockEngine eng = {1, 4096, 1005, EOS2, ""};
+static MockEngine eng = {1, 4096, 1005, EOS2, "", {0, 0}};
+static int api_snap_n;   // (main.c's)
+static int saves, restores, restored_at;   // the state copies of the mock engine, and where reading went on after one
+static uint64_t engine_state_size(const MockEngine* e) {
+    (void)e;
+    return 4096;
+}
+static int engine_state_copy(MockEngine* e, uint64_t buf, int save) {
+    (void)e;
+    (void)buf;
+    if (save) saves++;
+    else restores++, restored_at = -2;   // (the next prompt call says where it goes on)
+    return 0;
+}
 typedef struct {
     int dummy;
 } Tokenizer;
@@ -81,10 +97,17 @@ static void say(const char* fmt, ...) {
     (void)fmt;
 }
 static double now(void) { return 0; }
-static void api_chat_begin(void) { chat_begun++, msgs_cleared++; }   // (the real one clears the conversation)
-static void api_chat_reply(void) { chat_replies++; }
+static int prompt_phase;   // between api_chat_begin and api_chat_reply: the engine reads the prompt
+static void api_chat_begin(void) {   // (the real one clears the conversation)
+    chat_begun++, msgs_cleared++;
+    prompt_phase = 1, prompt_len_seen = 0;
+}
+static void api_chat_reply(void) {   // (the reply begins with the token the prompt's last piece drew)
+    chat_replies++, prompt_phase = 0;
+    if (script_k < script_len) script_k++;
+}
 static int api_chat_step(int produced) { return stop_at >= 0 && produced >= stop_at; }
-static void api_chat_end(void) { chat_ended++; }
+static void api_chat_end(void) { chat_ended++, prompt_phase = 0; }
 static int tok_encode(const Tokenizer* t, const char* s, uint32_t* out, int max);
 // as main.c
 static int encode_into(uint32_t* ids, int n, int max, const char* text) { return n + tok_encode(&tok, text, ids + n, max - n); }
@@ -126,8 +149,10 @@ static int engine_run(MockEngine* e, const uint32_t* tokens, int n, int pos0, fl
         snprintf(e->error, sizeof(e->error), "mock GPU fault");
         return -1;
     }
-    if (pos0 == 0) {   // the prompt (fed in one go, from position 0)
-        prompt_len_seen = n, next_pos = 0, first_temp = temperature, prompt_last = tokens[n - 1];
+    if (prompt_phase) {   // the prompt, in pieces: from 0, or from where a restored state left it
+        if (pos0 == 0) next_pos = 0;
+        if (restored_at == -2) restored_at = pos0, next_pos = pos0;
+        prompt_len_seen += n, first_temp = temperature, prompt_last = tokens[n - 1];
     } else {
         if (n > 1) close_fed++;
         fed += n;
@@ -135,7 +160,8 @@ static int engine_run(MockEngine* e, const uint32_t* tokens, int n, int pos0, fl
     last_temp = temperature;
     if (pos0 != next_pos) pos_errors++;
     next_pos += n;
-    if (script_k < script_len) *next = script[script_k++];
+    if (prompt_phase) *next = script_k < script_len ? script[script_k] : IM_END;   // (taken when the reply begins)
+    else if (script_k < script_len) *next = script[script_k++];
     else *next = IM_END;
     return 0;
 }
@@ -188,6 +214,7 @@ static void run_job(const char* body, const uint32_t* sc, int sc_len) {
     engine_calls = 0;
     fed = 0;
     close_fed = 0;
+    saves = restores = 0, restored_at = -1;
     ApiJob job;
     memset(&job, 0, sizeof(job));
     job.body = (char*)body;
@@ -502,6 +529,136 @@ static void test_think_history(void) {
     CHECK(prompt_len_seen == 49);
 }
 
+// ---- tools ---------------------------------------------------------------------------------------------------------
+// The last prompt as text: one byte per id, the special ones as <S:offset from <|im_start|>> (0 = <|im_start|>).
+static const char* prompt_text(int n) {
+    static char out[1 << 15];
+    size_t k = 0;
+    for (int i = 0; i < n && k + 16 < sizeof(out); i++) {
+        uint32_t t = api_ids[i];
+        if (t >= IM_START) k += (size_t)snprintf(out + k, sizeof(out) - k, "<S:%u>", t - IM_START);
+        else out[k++] = (char)(t - 1);
+    }
+    out[k] = 0;
+    return out;
+}
+
+// A scripted reply: text (one id per byte), with "@" for <tool_call> and "#" for </tool_call>.
+static uint32_t reply_sc[512];
+static int reply_of(const char* s) {
+    int n = 0;
+    for (; *s && n < 512; s++) reply_sc[n++] = *s == '@' ? TOOL_CALL : *s == '#' ? TOOL_CALL_END : (uint8_t)*s + 1u;
+    return n;
+}
+
+#define WEATHER_TOOL                                                                                            \
+    "\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Weather now\","   \
+    "\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"},\"days\":{\"type\":\"integer\"}}," \
+    "\"required\":[\"city\"]}}}]"
+#define WEATHER_CALL "@\n<function=get_weather>\n<parameter=city>\nLima\n</parameter>\n<parameter=days>\n3\n</parameter>\n</function>\n#"
+
+static void test_tools(void) {
+    int k = reply_of(WEATHER_CALL);
+    run_job("{\"messages\":[{\"role\":\"system\",\"content\":\"Be brief.\"},{\"role\":\"user\",\"content\":\"Weather?\"}],"
+            WEATHER_TOOL "}", reply_sc, k);
+    // the tools in the system message, as the chat template writes them, with the request's own system text after
+    const char* p = prompt_text(prompt_len_seen);
+    CHECK(strncmp(p, "<S:0>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n"
+                     "{\"type\": \"function\", \"function\": {\"name\": \"get_weather\"", 107) == 0);
+    CHECK(strstr(p, "</IMPORTANT>\n\nBe brief.<S:1>\n<S:0>user\nWeather?<S:1>\n<S:0>assistant\n") != NULL);
+    // the call, in OpenAI's form: integer arguments as numbers, content null
+    CHECK(strstr(wire, "\"content\":null,\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":"
+                       "{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Lima\\\",\\\"days\\\":3}\"}}]") != NULL);
+    CHECK(strstr(wire, "\"finish_reason\":\"tool_calls\"") != NULL);
+
+    // streamed: the words before the call go out, the call's text does not, the call comes whole at the end
+    k = reply_of("Checking.\n\n" WEATHER_CALL);
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"Weather?\"}]," WEATHER_TOOL ",\"stream\":true}", reply_sc, k);
+    CHECK(strstr(wire, "\"delta\":{\"content\":\"C\"}") != NULL);
+    CHECK(strstr(wire, "function=") == NULL);
+    CHECK(strstr(wire, "\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\","
+                       "\"function\":{\"name\":\"get_weather\"") != NULL);
+    CHECK(strstr(wire, "\"finish_reason\":\"tool_calls\"") != NULL && strstr(wire, "data: [DONE]") != NULL);
+
+    // a reply without a call is a plain answer, even with tools
+    static const uint32_t plain[] = {'O' + 1, 'K' + 1};
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}]," WEATHER_TOOL "}", plain, 2);
+    CHECK(strstr(wire, "\"content\":\"OK\"}") != NULL && strstr(wire, "\"finish_reason\":\"stop\"") != NULL);
+
+    // tool_choice "none": no tools in the prompt
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}]," WEATHER_TOOL ",\"tool_choice\":\"none\"}", plain, 2);
+    CHECK(prompt_len_seen == 27);
+}
+
+// The results of a call go back to the model as Qwen's template writes them, after the call itself.
+static void test_tool_results(void) {
+    static const uint32_t plain[] = {'1' + 1, '8' + 1};
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"Weather?\"},"
+            "{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\","
+            "\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Lima\\\"}\"}}]},"
+            "{\"role\":\"tool\",\"tool_call_id\":\"call_1\",\"content\":\"18 C\"},"
+            "{\"role\":\"tool\",\"tool_call_id\":\"call_2\",\"content\":\"sunny\"}]," WEATHER_TOOL "}", plain, 2);
+    const char* p = prompt_text(prompt_len_seen);
+    // (the mock's <think> and </think> are <|im_start|> + 2 and + 3)
+    CHECK(strstr(p, "<S:0>user\nWeather?<S:1>\n<S:0>assistant\n<S:2>\n\n<S:3>\n\n<S:13>\n<function=get_weather>\n"
+                    "<parameter=city>\nLima\n</parameter>\n</function>\n<S:14><S:1>\n"
+                    "<S:0>user\n<S:21>\n18 C\n<S:22>\n<S:21>\nsunny\n<S:22><S:1>\n<S:0>assistant\n") != NULL);
+    CHECK(strstr(wire, "\"content\":\"18\"") != NULL);
+}
+
+// tool_choice naming a function: the reply begins with its call, and the rest of the call is read with it.
+static void test_tool_choice(void) {
+    int k = reply_of("<parameter=city>\nCusco\n</parameter>\n</function>\n#");
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"Weather?\"}]," WEATHER_TOOL ","
+            "\"tool_choice\":{\"type\":\"function\",\"function\":{\"name\":\"get_weather\"}}}", reply_sc, k);
+    const char* p = prompt_text(prompt_len_seen);
+    CHECK(strstr(p, "<S:0>assistant\n<S:2>\n\n<S:3>\n\n<S:13>\n<function=get_weather>\n") != NULL);
+    CHECK(strstr(wire, "\"arguments\":\"{\\\"city\\\":\\\"Cusco\\\"}\"") != NULL);
+    CHECK(strstr(wire, "\"finish_reason\":\"tool_calls\"") != NULL);
+}
+
+// ---- the kept state of the prompt's beginning -------------------------------------------------------------------------
+static void test_kept_state(void) {
+    static const uint32_t plain[] = {'O' + 1, 'K' + 1};
+    eng.asr.ws_end = 1 << 20;   // (room for the copy)
+    api_snap_n = 0;
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", plain, 2);
+    CHECK(prompt_len_seen == 27 && saves == 1 && restores == 0);
+    CHECK(api_snap_n == 21);   // the messages (10) and <im_start> "assistant\n" (11)
+
+    // the same conversation, one turn longer: read from the copy on
+    const char* longer = "{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"},{\"role\":\"assistant\",\"content\":\"OK\"},"
+                         "{\"role\":\"user\",\"content\":\"more\"}]}";
+    run_job(longer, plain, 2);
+    CHECK(restores == 1 && restored_at == 21);
+    CHECK(prompt_len_seen == 54 - 21);   // (user "hi" 10, assistant "OK" 15, user "more" 12, the assistant's turn 17)
+    CHECK(api_snap_n == 48 && saves == 1);
+    CHECK(strstr(wire, "\"content\":\"OK\"") != NULL);
+
+    // another conversation: read from the start, and its own state kept
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"bye\"}]}", plain, 2);
+    CHECK(restores == 0 && prompt_len_seen == 28 && api_snap_n == 22);
+
+    // the chat used the model meanwhile (main.c sets api_snap_n to 0): read from the start
+    api_snap_n = 0;
+    run_job(longer, plain, 2);
+    CHECK(restores == 0 && prompt_len_seen == 54);
+
+    // tool results after the kept question: the question's state stays the one kept
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"Weather?\"}]," WEATHER_TOOL "}", plain, 2);
+    int kept = api_snap_n;
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"Weather?\"},"
+            "{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\","
+            "\"function\":{\"name\":\"get_weather\",\"arguments\":\"{}\"}}]},"
+            "{\"role\":\"tool\",\"content\":\"18 C\"}]," WEATHER_TOOL "}", plain, 2);
+    CHECK(kept > 0 && restores == 1 && restored_at == kept && saves == 0 && api_snap_n == kept);
+
+    eng.asr.ws_end = 0;   // no room: nothing is kept
+    api_snap_n = 0;
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", plain, 2);
+    CHECK(saves == 0 && api_snap_n == 0 && prompt_len_seen == 27);
+}
+
 static void test_utf8(void) {
     CHECK(api_utf8_whole((const uint8_t*)"\xc3", 1) == 0);
     CHECK(api_utf8_whole((const uint8_t*)"a\xc3", 2) == 1);
@@ -529,6 +686,10 @@ int main(void) {
         test_think_cut();
         test_think_room();
         test_think_history();
+        test_tools();
+        test_tool_results();
+        test_tool_choice();
+        test_kept_state();
         CHECK(pos_errors == 0);           // every token went in at the position after the one before
         CHECK(chat_begun == chat_ended);   // every request that took the screen gave it back
         CHECK(chat_replies <= chat_begun);

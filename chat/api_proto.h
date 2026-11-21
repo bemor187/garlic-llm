@@ -43,7 +43,7 @@ typedef struct JNode {
     uint8_t type;
     int b;                      // J_BOOL value
     double num;                 // J_NUM value
-    const char* s;              // J_STR: the raw text between the quotes (escapes not decoded)
+    const char* s;              // J_STR: the raw text between the quotes (escapes not decoded); J_NUM: as written
     size_t slen;
     const char* key;            // member name in an object (raw, as above)
     size_t klen;
@@ -63,30 +63,59 @@ int api_message(const JNode* pool, int msg, char* role, size_t rcap, Sb* out);
 // "/nothink") for none. It is taken out of text, with the spaces before it. Returns 1, 0, or -1 if there is none.
 int api_think_switch(Sb* text);
 // An earlier assistant message as the model reads it: reasoning a client sent back in the text (anything up to the
-// last "</think>") is left out, as Qwen's chat template leaves it out, with the line breaks after it.
-void api_drop_think(Sb* text);
+// last "</think>") is left out, as Qwen's chat template leaves it out, with the line breaks after it. If reasoning is
+// not NULL it gets that reasoning (what Qwen's template keeps of it), trimmed.
+void api_drop_think(Sb* text, Sb* reasoning);
+// Removes the spaces and line breaks at both ends of text (the chat template trims every message).
+void api_trim(Sb* text);
+// Any parsed JSON value written back as compact JSON (strings and numbers exactly as they were written).
+void json_write(const JNode* pool, int node, Sb* out);
+// The same with a space after each ',' and ':', as the chat template writes the tools.
+void json_write_spaced(const JNode* pool, int node, Sb* out);
+
+// ---- tool calls ---------------------------------------------------------------------------------------------------
+// Qwen3.5 calls a tool by writing <tool_call><function=name><parameter=key>value</parameter>...</function></tool_call>
+// (its chat template's format); the API turns that into OpenAI's tool_calls, and OpenAI's tools into that format.
+#define API_MAX_TOOL_CALLS 16
+enum { TOOL_NONE = 0, TOOL_AUTO = 1, TOOL_REQUIRED = 2, TOOL_NAMED = 3 };
+
+typedef struct {
+    char id[40];                // "call_1", ...
+    char name[64];              // the function's name
+    Sb arguments;               // its arguments as a JSON object, e.g. {"query":"ps4"}
+} ApiToolCall;
+
+void api_free_tool_calls(ApiToolCall* calls, int n);
 
 // ---- JSON writers used by the API ------------------------------------------------------------------------------------
 // The JSON of GET /v1/models: one model, the one loaded.
 void api_json_models(Sb* out, const char* model, long long created);
 // A complete chat.completion (non-streaming). The reasoning (rlen > 0) goes in message.reasoning_content, and its
-// tokens, which completion_tokens includes, in usage.completion_tokens_details.reasoning_tokens.
+// tokens, which completion_tokens includes, in usage.completion_tokens_details.reasoning_tokens. With tool calls
+// (n_calls > 0) the message carries tool_calls, and its content is null when there is no text besides them.
 void api_json_completion(Sb* out, const char* id, const char* model, long long created, const char* reasoning,
-                         size_t rlen, const char* text, size_t tlen, const char* finish, int prompt_tokens,
-                         int completion_tokens, int reasoning_tokens);
+                         size_t rlen, const char* text, size_t tlen, const ApiToolCall* calls, int n_calls,
+                         const char* finish, int prompt_tokens, int completion_tokens, int reasoning_tokens);
 // One chat.completion.chunk (streaming). role != NULL: the first chunk, with the role. A piece of the reasoning goes
 // in delta.reasoning_content, a piece of the answer in delta.content; either may be empty.
 void api_json_chunk(Sb* out, const char* id, const char* model, long long created, const char* role,
                     const char* reasoning, size_t rlen, const char* text, size_t tlen, const char* finish);
+// One chat.completion.chunk with one whole tool call (delta.tool_calls[0], at index).
+void api_json_chunk_tool(Sb* out, const char* id, const char* model, long long created, int index,
+                         const ApiToolCall* call);
 // The error object: {"error": {"message", "type", "code"}}.
 void api_json_error(Sb* out, const char* message, const char* type, const char* code);
 
 // ---- chat request -------------------------------------------------------------------------------------------------
-#define API_MAX_NODES 1024
+#define API_MAX_NODES 4096        // (the tools' JSON schemas take many nodes)
 typedef struct {
     int root;                   // root node (in the pool the caller gives)
     int messages;               // the messages array node (-1 if missing)
     int n_messages;
+    int tools;                  // the tools array node (-1 if missing or empty)
+    int n_tools;
+    int tool_choice;            // TOOL_NONE, TOOL_AUTO (the default with tools), TOOL_REQUIRED, TOOL_NAMED
+    char tool_name[64];         // the function tool_choice names (TOOL_NAMED)
     double temperature;         // default 0.7
     int max_tokens;             // default 512
     int stream;                 // 0 or 1
@@ -100,5 +129,16 @@ typedef struct {
 // Reads a chat.completions body. Returns 0 if valid (fills req; messages are pool nodes, each an object with role
 // and content), or -1 with the reason in err (a fixed string, for the 400 answer).
 int api_chat_parse(const char* body, size_t len, JNode* pool, int max, ChatRequest* req, const char** err);
+
+// The system message of a request with tools: Qwen3.5's tool block (each tool's JSON and how to call one), then the
+// request's own system text (user_sys, may be empty).
+void api_system_tools(const JNode* pool, const ChatRequest* req, const char* user_sys, Sb* out);
+// An assistant message's tool_calls in Qwen3.5's format, into out. Returns how many, or -1 if malformed.
+int api_assistant_tool_calls(const JNode* pool, int msg, Sb* out);
+// The tool calls in the model's reply (text, len): up to max_calls into calls (OpenAI's form). The text before the
+// first <tool_call> goes to content_out. Returns how many were read. Arguments whose schema is not a string (numbers,
+// booleans, objects) are given as JSON values.
+int api_parse_tool_calls(const JNode* pool, const ChatRequest* req, const char* text, size_t len, Sb* content_out,
+                         ApiToolCall* calls, int max_calls);
 
 #endif

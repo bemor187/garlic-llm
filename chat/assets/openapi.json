@@ -4,7 +4,7 @@
     "title": "Garlic LLM API",
     "version": "1.20",
     "summary": "OpenAI-compatible chat API for Garlic LLM, running on a PlayStation 4.",
-    "description": "Garlic LLM runs Qwen3.5 on the PS4's own GPU. This API speaks the OpenAI Chat Completions protocol, so existing OpenAI client libraries work by changing the base URL to http://<console-address>:8080/v1.\n\nThe API is off until it is turned on with L3 on the console's chat screen, which then shows the address.\n\nOne request runs at a time; requests sent meanwhile wait their turn, up to 8 in all (more get 503). While the model answers, the console's screen says so and the conversation that was on it is cleared. Circle on the controller stops the reply: the client gets what was written so far, with finish_reason \"length\".\n\nReasoning follows the console's think mode unless the request chooses: the last message may end with /think or /no_think, or the request may set chat_template_kwargs.enable_thinking. The reasoning comes apart from the answer, in reasoning_content. Parameters the console does not implement (for example tools, logprobs, presence_penalty) are ignored. Only n = 1 is supported.",
+    "description": "Garlic LLM runs Qwen3.5 on the PS4's own GPU. This API speaks the OpenAI Chat Completions protocol, so existing OpenAI client libraries work by changing the base URL to http://<console-address>:8080/v1.\n\nThe API is off until it is turned on with L3 on the console's chat screen, which then shows the address.\n\nOne request runs at a time; requests sent meanwhile wait their turn, up to 8 in all (more get 503). While the model answers, the console's screen says so and the conversation that was on it is cleared. Circle on the controller stops the reply: the client gets what was written so far, with finish_reason \"length\".\n\nReasoning follows the console's think mode unless the request chooses: the last message may end with /think or /no_think, or the request may set chat_template_kwargs.enable_thinking. The reasoning comes apart from the answer, in reasoning_content.\n\nTools work as in OpenAI's API: tools and tool_choice in the request, tool_calls in the reply (finish_reason \"tool_calls\"), the results back as messages with role \"tool\". A streamed reply sends each call whole, after its text.\n\nThe console keeps what it read of the last conversation, so a request that continues it only reads its new messages.\n\nParameters the console does not implement (for example logprobs, presence_penalty) are ignored. Only n = 1 is supported.",
     "license": { "name": "GPL-3.0", "url": "https://github.com/leonardo-alegria/garlic-llm/blob/main/LICENSE" }
   },
   "servers": [
@@ -123,16 +123,17 @@
     "schemas": {
       "Role": {
         "type": "string",
-        "enum": ["system", "user", "assistant", "tool"]
+        "enum": ["system", "developer", "user", "assistant", "tool"]
       },
       "Message": {
         "type": "object",
-        "required": ["role", "content"],
+        "required": ["role"],
         "properties": {
           "role": { "$ref": "#/components/schemas/Role" },
           "content": {
             "oneOf": [
               { "type": "string" },
+              { "type": "null" },
               {
                 "type": "array",
                 "items": {
@@ -145,6 +146,41 @@
                 }
               }
             ]
+          },
+          "tool_calls": { "type": "array", "items": { "$ref": "#/components/schemas/ToolCall" }, "description": "An assistant message's calls, as the API sent them." },
+          "tool_call_id": { "type": "string", "description": "A tool message: the call it answers." },
+          "reasoning_content": { "type": "string", "description": "An assistant message's reasoning, as the API sent it (kept only in a run of tool calls, as Qwen's chat template does)." }
+        }
+      },
+      "Tool": {
+        "type": "object",
+        "required": ["type", "function"],
+        "properties": {
+          "type": { "type": "string", "const": "function" },
+          "function": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" },
+              "description": { "type": "string" },
+              "parameters": { "type": "object", "description": "A JSON Schema of the arguments." }
+            }
+          }
+        }
+      },
+      "ToolCall": {
+        "type": "object",
+        "required": ["id", "type", "function"],
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string", "const": "function" },
+          "function": {
+            "type": "object",
+            "required": ["name", "arguments"],
+            "properties": {
+              "name": { "type": "string" },
+              "arguments": { "type": "string", "description": "A JSON object, as text." }
+            }
           }
         }
       },
@@ -167,7 +203,15 @@
             }
           },
           "enable_thinking": { "type": "boolean", "description": "Same as chat_template_kwargs.enable_thinking." },
-          "reasoning_effort": { "type": "string", "description": "\"none\" or \"minimal\": no reasoning; any other value: reasoning. Used when enable_thinking is not given." }
+          "reasoning_effort": { "type": "string", "description": "\"none\" or \"minimal\": no reasoning; any other value: reasoning. Used when enable_thinking is not given." },
+          "tools": { "type": "array", "items": { "$ref": "#/components/schemas/Tool" } },
+          "tool_choice": {
+            "description": "\"auto\" (the default with tools), \"none\", \"required\", or one function: {\"type\": \"function\", \"function\": {\"name\": ...}}. With \"required\" or a function the reply begins with a call and does not reason.",
+            "oneOf": [
+              { "type": "string", "enum": ["auto", "none", "required"] },
+              { "type": "object", "required": ["function"], "properties": { "type": { "type": "string", "const": "function" }, "function": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" } } } } }
+            ]
+          }
         }
       },
       "Usage": {
@@ -204,11 +248,12 @@
                   "required": ["role", "content"],
                   "properties": {
                     "role": { "type": "string", "const": "assistant" },
-                    "content": { "type": "string" },
-                    "reasoning_content": { "type": "string", "description": "The reasoning before the answer, when the model reasoned." }
+                    "content": { "type": ["string", "null"], "description": "null when the reply is only tool calls." },
+                    "reasoning_content": { "type": "string", "description": "The reasoning before the answer, when the model reasoned." },
+                    "tool_calls": { "type": "array", "items": { "$ref": "#/components/schemas/ToolCall" } }
                   }
                 },
-                "finish_reason": { "type": "string", "enum": ["stop", "length"] }
+                "finish_reason": { "type": "string", "enum": ["stop", "length", "tool_calls"] }
               }
             }
           },
@@ -235,10 +280,20 @@
                   "properties": {
                     "role": { "type": "string", "const": "assistant" },
                     "reasoning_content": { "type": "string", "description": "A piece of the reasoning; these come before the answer's." },
-                    "content": { "type": "string" }
+                    "content": { "type": "string" },
+                    "tool_calls": {
+                      "type": "array",
+                      "description": "One whole call per chunk, after the text.",
+                      "items": {
+                        "allOf": [
+                          { "$ref": "#/components/schemas/ToolCall" },
+                          { "type": "object", "required": ["index"], "properties": { "index": { "type": "integer" } } }
+                        ]
+                      }
+                    }
                   }
                 },
-                "finish_reason": { "type": ["string", "null"], "enum": ["stop", "length", null] }
+                "finish_reason": { "type": ["string", "null"], "enum": ["stop", "length", "tool_calls", null] }
               }
             }
           }

@@ -72,7 +72,7 @@ static void test_json(void) {
 }
 
 static void test_chat(void) {
-    JNode pool[API_MAX_NODES];
+    static JNode pool[API_MAX_NODES];
     ChatRequest req;
     const char* err = NULL;
     const char* body =
@@ -117,7 +117,7 @@ static void test_chat(void) {
 
 // The request's reasoning fields: the chat template's switch first, then the plainer spellings; none = -1.
 static void test_think_fields(void) {
-    JNode pool[API_MAX_NODES];
+    static JNode pool[API_MAX_NODES];
     ChatRequest req;
     const char* err = NULL;
     static const struct {
@@ -159,10 +159,54 @@ static int drop_of(const char* in, const char* left) {
     Sb s;
     sb_init(&s);
     sb_str(&s, in);
-    api_drop_think(&s);
+    api_drop_think(&s, NULL);
     int ok = s.n == strlen(left) && (!s.n || !strcmp(s.p, left));
     sb_free(&s);
     return ok;
+}
+
+static void test_tool_fields(void) {
+    static JNode pool[API_MAX_NODES];
+    ChatRequest req;
+    const char* err = NULL;
+#define MSG "\"messages\":[{\"role\":\"user\",\"content\":\"a\"}]"
+#define TOOL "{\"type\":\"function\",\"function\":{\"name\":\"f\",\"parameters\":{\"type\":\"object\"}}}"
+    const char* ok = "{" MSG ",\"tools\":[" TOOL "]}";
+    CHECK(api_chat_parse(ok, strlen(ok), pool, API_MAX_NODES, &req, &err) == 0);
+    CHECK(req.n_tools == 1 && req.tools >= 0 && req.tool_choice == TOOL_AUTO);
+    const char* none = "{" MSG ",\"tools\":[" TOOL "],\"tool_choice\":\"none\"}";
+    CHECK(api_chat_parse(none, strlen(none), pool, API_MAX_NODES, &req, &err) == 0 && req.tool_choice == TOOL_NONE);
+    const char* named = "{" MSG ",\"tools\":[" TOOL "],\"tool_choice\":{\"type\":\"function\",\"function\":{\"name\":\"f\"}}}";
+    CHECK(api_chat_parse(named, strlen(named), pool, API_MAX_NODES, &req, &err) == 0);
+    CHECK(req.tool_choice == TOOL_NAMED && !strcmp(req.tool_name, "f"));
+    const char* plain = "{" MSG "}";
+    CHECK(api_chat_parse(plain, strlen(plain), pool, API_MAX_NODES, &req, &err) == 0);
+    CHECK(req.n_tools == 0 && req.tools == -1 && req.tool_choice == TOOL_NONE);
+    const char* bad[] = {
+        "{" MSG ",\"tools\":{}}",
+        "{" MSG ",\"tools\":[{\"type\":\"function\",\"function\":{}}]}",
+        "{" MSG ",\"tool_choice\":\"required\"}",
+        "{" MSG ",\"tools\":[" TOOL "],\"tool_choice\":\"sometimes\"}",
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        CHECK(api_chat_parse(bad[i], strlen(bad[i]), pool, API_MAX_NODES, &req, &err) == -1);
+        CHECK(err != NULL);
+    }
+#undef MSG
+#undef TOOL
+}
+
+// A call written as JSON (the form of earlier Qwen models) is read too.
+static void test_tool_json_call(void) {
+    ApiToolCall calls[API_MAX_TOOL_CALLS];
+    Sb before;
+    sb_init(&before);
+    const char* text = "Sure.\n<tool_call>\n{\"name\": \"f\", \"arguments\": {\"a\": 1}}\n</tool_call>";
+    int n = api_parse_tool_calls(NULL, NULL, text, strlen(text), &before, calls, API_MAX_TOOL_CALLS);
+    CHECK(n == 1 && !strcmp(calls[0].name, "f") && calls[0].arguments.p && !strcmp(calls[0].arguments.p, "{\"a\":1}"));
+    CHECK(before.n == 5 && !memcmp(before.p, "Sure.", 5));
+    api_free_tool_calls(calls, n);
+    sb_free(&before);
 }
 
 static void test_think_text(void) {
@@ -182,7 +226,7 @@ static void test_think_text(void) {
 static void test_writers(void) {
     Sb s;
     sb_init(&s);
-    api_json_completion(&s, "chatcmpl-1", "Qwen3.5-9B", 1700000000, "", 0, "Hola \"mundo\"\n", 13, "stop", 5, 4, 0);
+    api_json_completion(&s, "chatcmpl-1", "Qwen3.5-9B", 1700000000, "", 0, "Hola \"mundo\"\n", 13, NULL, 0, "stop", 5, 4, 0);
     CHECK(s.p && strstr(s.p, "\"content\":\"Hola \\\"mundo\\\"\\n\"") != NULL);
     CHECK(strstr(s.p, "\"total_tokens\":9") != NULL);
     CHECK(strstr(s.p, "\"finish_reason\":\"stop\"") != NULL);
@@ -190,7 +234,7 @@ static void test_writers(void) {
     sb_free(&s);
 
     sb_init(&s);
-    api_json_completion(&s, "c", "m", 1, "Let me see.", 11, "Yes.", 4, "stop", 5, 30, 26);
+    api_json_completion(&s, "c", "m", 1, "Let me see.", 11, "Yes.", 4, NULL, 0, "stop", 5, 30, 26);
     CHECK(strstr(s.p, "\"message\":{\"role\":\"assistant\",\"content\":\"Yes.\",\"reasoning_content\":\"Let me see.\"}"));
     CHECK(strstr(s.p, "\"completion_tokens\":30,\"total_tokens\":35,"
                       "\"completion_tokens_details\":{\"reasoning_tokens\":26}}") != NULL);
@@ -224,6 +268,8 @@ int main(void) {
     test_json();
     test_chat();
     test_think_fields();
+    test_tool_fields();
+    test_tool_json_call();
     test_think_text();
     test_writers();
     printf("%d checks, %d failed\n", checks, fails);

@@ -114,8 +114,10 @@ curl http://192.168.1.5:8080/v1/chat/completions \
 - One request runs at a time, and the chat screen is busy while it does: it says that a request is being answered, and ○ stops the reply (the client gets what was written so far, with `finish_reason: "length"`). Requests wait while the keyboard, voice mode or a Python program is open. Chat requests sent meanwhile wait their turn, up to 8 in all (more get `503` with the code `busy`); `/v1/models` and `/health` answer at once.
 - A client may stop a reply at any time, for example with a stop button: the console ends that reply and keeps running.
 - A request is a conversation of its own, so the one on the console's screen is cleared.
+- A conversation is read once. Clients send the whole conversation with every message; the console keeps what it already read of the last one, so a new message only reads what is new. Using the chat, dictation, voice mode or a Python program on the console in between makes the next request read it all again.
 - Reasoning follows the console's think mode (R3 or the touch pad). A request can choose for itself: end the last message with `/think` or `/no_think`, or send `"chat_template_kwargs": {"enable_thinking": true}` (or `false`). The reasoning comes back apart from the answer, as `reasoning_content`, so chat apps that show reasoning put it in their thinking box. It takes up to 1024 tokens, the same as on the console, and `max_tokens` counts the answer only.
-- Only `n = 1` is supported; `tools`, `logprobs` and similar parameters are ignored.
+- Tools (function calling) work as with OpenAI: send `tools`, and the model answers with `tool_calls` and `finish_reason: "tool_calls"`; send the results back as `role: "tool"` messages. `tool_choice` takes `auto`, `none`, `required` or one function. A streamed reply sends its text as usual and each call whole at the end.
+- Only `n = 1` is supported; `logprobs` and similar parameters are ignored.
 - For an API key, put it in `/data/garlic_api_key.txt` on the console. Requests then need `Authorization: Bearer <key>`. Without that file, anyone on your network can use the API while it is on, and clients that insist on a key accept any text.
 - If the screen shows `API · :8080`, the app could not read the console's address: it is in *Settings → Network → View Connection Status*.
 
