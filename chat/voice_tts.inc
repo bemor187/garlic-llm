@@ -496,7 +496,7 @@ static void tts_work(void) {
         int cap = tts_fluent >= 2 ? 450 : 300;
         if (max_out > cap) max_out = cap;
         t3_voice(&eng, lang);    // native pronunciation for this language
-        s3g_voice(&eng, lang);   // and its own voice where it has one (Russian), else Garlic's
+        s3g_voice(&eng, lang);   // and its own voice where it has one (Russian, Arabic, Japanese), else Garlic's
         if (t3_start(&eng, toks, n, max_out, ++tts.seed, 0)) {
             say("voice: T3 failed (%s)", eng.error);
             return;

@@ -15,7 +15,7 @@ Garlic LLM is a homebrew app for the PlayStation 4. It runs [Qwen3.5-9B](https:/
 | Feature | Details |
 |---|---|
 | **Text chat** | Qwen3.5-9B at 31–39 tokens/s, and up to 43 tokens/s on code. 16K-token context. |
-| **Voice conversation** | Speak and it answers aloud (Chatterbox) in Spanish, English, Portuguese, Russian, Italian, French and German. |
+| **Voice conversation** | Speak and it answers aloud (Chatterbox) in Spanish, English, Portuguese, Russian, Italian, French, German, Arabic and Japanese. |
 | **Dictation** | Hold a button and talk instead of typing (Parakeet TDT 0.6B v3), in 25 European languages. |
 | **Python mode** | Ask for a program. It writes MicroPython and the console runs it. |
 | **Think mode** | The model reasons before it answers. Off by default; a thought takes about half a minute. |
@@ -204,6 +204,8 @@ The app's code is licensed under the [GNU General Public License v3.0](LICENSE).
 |---|---|---|
 | Qwen3.5-9B and Qwen3.5-4B | Alibaba Qwen | Apache-2.0 |
 | Chatterbox (text to speech) | Resemble AI | MIT |
+| Voices for Russian, Arabic and Japanese | Mozilla Common Voice contributors | CC0-1.0 |
+| Japanese kanji readings (pykakasi's dictionary, from KAKASI and UniDic) | Hiroshi Miura and contributors, the KAKASI authors | GPL-3.0-or-later |
 | Parakeet TDT 0.6B v3 (speech to text) | NVIDIA | CC-BY-4.0 |
 | MicroPython | The MicroPython project | MIT |
 | Twemoji | Twitter, Inc. and other contributors | CC-BY-4.0 |

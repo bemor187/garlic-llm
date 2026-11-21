@@ -119,7 +119,7 @@ typedef struct {
     uint32_t nt;
     char path[129];
     uint64_t size;
-    S3Voice voice[8];           // [0] the built-in voice, then the languages that have their own (Russian)
+    S3Voice voice[8];           // [0] the built-in voice, then the languages that have their own (ru, ar, ja)
     int nvoice;
     uint32_t np, nmel;          // the voice in use (s3g_voice): prompt speech tokens, prompt mel frames, speaker vector
     int32_t* ptok;
