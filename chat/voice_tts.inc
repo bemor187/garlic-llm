@@ -48,7 +48,7 @@ static void tts_gaps_log(void);
 static void tts_reply_summary(void);
 
 static const char* lang_code(void) {
-    static const char* c[N_LANGS] = {"es", "en", "pt", "ru"};
+    static const char* c[N_LANGS] = {"es", "en", "pt", "ru", "fr", "de", "ar", "ja", "zh", "zh", "ko"};
     return c[ui_lang];
 }
 

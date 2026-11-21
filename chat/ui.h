@@ -14,9 +14,12 @@ void say(const char* fmt, ...);                      // log
 uint8_t* read_all(const char* path, size_t* size);   // whole file, malloc'd
 
 // ---- languages: chosen from the console's system language ----
-enum { LANG_ES, LANG_EN, LANG_PT, LANG_RU, N_LANGS };
+// ZH_HANS: Simplified Chinese, ZH_HANT: Traditional Chinese
+enum { LANG_ES, LANG_EN, LANG_PT, LANG_RU, LANG_FR, LANG_DE, LANG_AR, LANG_JA, LANG_ZH_HANS, LANG_ZH_HANT, LANG_KO, N_LANGS };
 extern int ui_lang;
+extern const char* const lang_codes[N_LANGS];   // "es", "en", ..., "zh-Hans", "zh-Hant", "ko"
 int lang_from_system(int system_lang);   // OrbisSystemParamLanguage -> LANG_*
+int lang_rtl(int lang);                  // written right to left (Arabic)
 
 typedef enum {
     S_TAGLINE, S_EMPTY_HINT, S_WRITE, S_TALK_HOLD, S_STOP, S_NEW_CHAT, S_SCROLL, S_TEMPERATURE, S_CONTEXT,
@@ -27,7 +30,7 @@ typedef enum {
     S_SYSTEM_PROMPT, S_LOCAL_GPU, S_PY_RUN, S_PY_EXIT, S_PY_CLICK, S_PY_RCLICK, S_PY_MOVE, S_PY_KEYS, S_PY_BACK,
     S_PY_AGAIN, S_PY_FIX, S_PY_DONE, S_PY_ERROR, S_PY_STOPPED, S_PY_STARTING, S_PY_FIX_MSG, S_PY_FIX_ASK, S_PY_INPUT, S_VOICE_MODE, S_THINKING, S_LISTENING_SHORT, S_VOICE_LOADING, S_VOICE_NO_TTS,
     S_THINK_OFF_HINT, S_THINK_ON_HINT, S_THINK_ON_TOAST, S_THINK_OFF_TOAST, S_THOUGHT, S_THINK_CUT, S_THINK_CHIP,
-    S_API_ON, S_API_OFF, S_API_FAILED, S_API_BUSY, S_API_DONE, N_STRINGS
+    S_API_ON, S_API_OFF, S_API_FAILED, S_API_BUSY, S_API_DONE, S_KB_SYSTEM, N_STRINGS
 } StrId;
 const char* tr(StrId id);
 
@@ -102,6 +105,7 @@ void draw_footer(const Hint* hints, int n, const char* right);
 
 // ---- the on-screen keyboard (drawn by the app, driven by the controller) ----
 enum { KB_ES, KB_EN, KB_PT, KB_RU, N_KB_LAYOUTS };
+int kb_layout_for(int lang);   // the layout the keyboard opens with in a language (LANG_*)
 typedef struct {
     int layout;              // KB_*
     int page;                // 0 = letters, 1.. = emoji category

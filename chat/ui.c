@@ -49,155 +49,30 @@ const char* ui_error = "";
 
 // ---- strings ---------------------------------------------------------------------------------------------------
 
-static const char* strings[N_STRINGS][N_LANGS] = {
-    [S_TAGLINE] = {"%s en la GPU de tu PS4.", "%s on your PS4's GPU.", "%s na GPU do seu PS4.", "%s на GPU вашей PS4."},   // the model's name
-    [S_EMPTY_HINT] = {"100% local y sin internet.", "100% local, no internet.", "100% local e sem internet.",
-                      "100% локально, без интернета."},
-    [S_WRITE] = {"Escribir", "Type", "Escrever", "Написать"},
-    [S_TALK_HOLD] = {"Mantén para hablar", "Hold to talk", "Segure para falar", "Голос (удерживать)"},
-    [S_STOP] = {"Detener", "Stop", "Parar", "Остановить"},
-    [S_NEW_CHAT] = {"Nueva conversación", "New chat", "Nova conversa", "Новый чат"},
-    [S_SCROLL] = {"Desplazar", "Scroll", "Rolar", "Прокрутка"},
-    [S_TEMPERATURE] = {"Temperatura", "Temperature", "Temperatura", "Температура"},
-    [S_CONTEXT] = {"contexto", "context", "contexto", "контекст"},
-    [S_READING] = {"Leyendo tu mensaje…", "Reading your message…", "Lendo sua mensagem…", "Читаю сообщение…"},
-    [S_CONTEXT_FULL] = {"La conversación llenó la memoria del modelo; empiezo una nueva.",
-                        "The conversation filled the model's memory; starting a new one.",
-                        "A conversa encheu a memória do modelo; começando uma nova.",
-                        "Разговор заполнил память модели; начинаю новый."},
-    [S_PLACEHOLDER] = {"Escribe un mensaje…", "Type a message…", "Digite uma mensagem…", "Введите сообщение…"},
-    [S_KB_TYPE] = {"Escribir", "Type", "Digitar", "Ввод"},
-    [S_KB_DELETE] = {"Borrar", "Delete", "Apagar", "Удалить"},
-    [S_KB_SPACE] = {"Espacio", "Space", "Espaço", "Пробел"},
-    [S_KB_SHIFT] = {"Mayúsculas", "Shift", "Maiúsculas", "Регистр"},
-    [S_KB_EMOJI] = {"Emoji", "Emoji", "Emoji", "Эмодзи"},
-    [S_KB_LETTERS] = {"Letras", "Letters", "Letras", "Буквы"},
-    [S_KB_DICTATE] = {"Dictar (mantener)", "Dictate (hold)", "Ditar (segurar)", "Диктовка (удерж.)"},
-    [S_KB_SEND] = {"Enviar", "Send", "Enviar", "Отправить"},
-    [S_KB_CLOSE] = {"Cerrar", "Close", "Fechar", "Закрыть"},
-    [S_SPACE_KEY] = {"espacio", "space", "espaço", "пробел"},
-    [S_SEND_KEY] = {"Enviar", "Send", "Enviar", "Отправить"},
-    [S_LISTENING] = {"Escuchando…", "Listening…", "Ouvindo…", "Слушаю…"},
-    [S_RELEASE_TO_END] = {"Suelta para terminar", "Release to finish", "Solte para terminar", "Отпустите, чтобы закончить"},
-    [S_TRANSCRIBING] = {"Transcribiendo…", "Transcribing…", "Transcrevendo…", "Распознаю речь…"},
-    [S_YOUR_MESSAGE] = {"Tu mensaje", "Your message", "Sua mensagem", "Ваше сообщение"},
-    [S_SEND] = {"Enviar", "Send", "Enviar", "Отправить"},
-    [S_EDIT] = {"Editar", "Edit", "Editar", "Изменить"},
-    [S_RETRY] = {"Repetir", "Retry", "Repetir", "Заново"},
-    [S_DISCARD] = {"Descartar", "Discard", "Descartar", "Отмена"},
-    [S_NO_MIC] = {"No se detecta micrófono: conecta unos auriculares al mando.",
-                  "No microphone found: plug a headset into the controller.",
-                  "Nenhum microfone detectado: conecte um fone ao controle.",
-                  "Микрофон не найден: подключите гарнитуру к геймпаду."},
-    [S_NO_SPEECH] = {"No se entendió nada. Inténtalo otra vez.", "Didn't catch that. Try again.",
-                     "Não entendi nada. Tente de novo.", "Ничего не распознано. Попробуйте ещё раз."},
-    [S_ASR_OFF] = {"El reconocimiento de voz no está disponible.", "Speech recognition is not available.",
-                   "O reconhecimento de voz não está disponível.", "Распознавание речи недоступно."},
-    [S_HOLD_LONGER] = {"Mantén □ pulsado mientras hablas.", "Keep □ held while you speak.",
-                       "Mantenha □ pressionado enquanto fala.", "Держите □, пока говорите."},
-    [S_PREPARING] = {"Preparando", "Getting ready", "Preparando", "Подготовка"},
-    [S_LOADING_MODEL] = {"Cargando el modelo", "Loading the model", "Carregando o modelo", "Загрузка модели"},
-    [S_LOADING_VOICE] = {"Cargando el reconocimiento de voz", "Loading speech recognition",
-                         "Carregando o reconhecimento de voz", "Загрузка распознавания речи"},
-    [S_ERROR_TITLE] = {"No se pudo iniciar", "Couldn't start", "Não foi possível iniciar", "Не удалось запустить"},
-    [S_ERROR_HINT] = {"Pulsa el botón PS para salir.", "Press the PS button to exit.", "Pressione o botão PS para sair.",
-                      "Нажмите кнопку PS, чтобы выйти."},
-    [S_OFFLINE] = {"100 % sin conexión", "100% offline", "100% offline", "100% офлайн"},
-    [S_SYSTEM_PROMPT] = {
-        "Eres Garlic LLM, un asistente útil que funciona sin internet en la GPU de una PlayStation 4. "
-        "Responde en el idioma del usuario, de forma clara y sin rodeos.",
-        "You are Garlic LLM, a helpful assistant running offline on a PlayStation 4's GPU. Answer in the "
-        "user's language, clearly and directly.",
-        "Você é o Garlic LLM, um assistente útil que funciona sem internet na GPU de um PlayStation 4. "
-        "Responda no idioma do usuário, de forma clara e direta.",
-        "Ты — Garlic LLM, полезный ассистент, который работает без интернета на GPU PlayStation 4. Отвечай на "
-        "языке пользователя, ясно и по делу."},
-    [S_LOCAL_GPU] = {"GPU local", "local GPU", "GPU local", "локальный GPU"},
-    [S_PY_RUN] = {"Ejecutar Python", "Run Python", "Executar Python", "Запустить Python"},
-    [S_PY_EXIT] = {"Salir", "Exit", "Sair", "Выйти"},
-    [S_PY_CLICK] = {"Clic", "Click", "Clique", "Клик"},
-    [S_PY_RCLICK] = {"Clic derecho", "Right click", "Clique direito", "Правый клик"},
-    [S_PY_MOVE] = {"Mover", "Move", "Mover", "Двигать"},
-    [S_PY_KEYS] = {"Flechas", "Arrows", "Setas", "Стрелки"},
-    [S_PY_BACK] = {"Volver al chat", "Back to chat", "Voltar ao chat", "Назад в чат"},
-    [S_PY_AGAIN] = {"Ejecutar de nuevo", "Run again", "Executar de novo", "Запустить снова"},
-    [S_PY_FIX] = {"Pedir arreglo", "Ask for a fix", "Pedir correção", "Попросить исправить"},
-    [S_PY_DONE] = {"Programa terminado", "Program finished", "Programa terminado", "Программа завершена"},
-    [S_PY_ERROR] = {"El programa tuvo un error", "The program hit an error", "O programa teve um erro", "В программе ошибка"},
-    [S_PY_STOPPED] = {"Programa detenido", "Program stopped", "Programa interrompido", "Программа остановлена"},
-    [S_PY_STARTING] = {"Ejecutando", "Running", "Executando", "Запуск"},
-    // "Ask for a fix": states that the program ran on the PS4 itself; without that context the model may answer
-    // that Python cannot run on a PS4
-    [S_PY_FIX_MSG] = {
-        "Ejecuté tu programa aquí mismo, en la PS4, y falló con este error:",
-        "I ran your program right here on the PS4, and it failed with this error:",
-        "Executei o seu programa aqui mesmo, no PS4, e ele falhou com este erro:",
-        "Я запустил твою программу прямо здесь, на PS4, и она завершилась с ошибкой:"},
-    // "Ask for a fix", the request: lists what Garlic's Python has and what it lacks
-    [S_PY_FIX_ASK] = {
-        "Corrígelo para el Python 3 de Garlic (MicroPython): hay turtle, pygame y tkinter adaptados a la tele "
-        "(las flechas, Espacio y Enter van al mando), input(), print(), random, math, time, collections, "
-        "itertools, string y copy; no hay numpy, matplotlib, archivos, red ni sonido. Casi siempre el fallo "
-        "está en el propio código: busca la causa y corrígela sin quitar nada de lo pedido. Escribe el "
-        "programa completo en un solo bloque ```python.",
-        "Fix it for Garlic's Python 3 (MicroPython): it has turtle, pygame and tkinter adapted to the TV "
-        "(arrows, Space and Enter are on the controller), input(), print(), random, math, time, collections, "
-        "itertools, string and copy; there is no numpy, matplotlib, files, network or sound. The bug is "
-        "almost always in the code itself: find the cause and fix it without dropping anything that was asked "
-        "for. Write the whole program in a single ```python block.",
-        "Corrija-o para o Python 3 do Garlic (MicroPython): há turtle, pygame e tkinter adaptados à TV (as "
-        "setas, Espaço e Enter ficam no controle), input(), print(), random, math, time, collections, "
-        "itertools, string e copy; não há numpy, matplotlib, arquivos, rede nem som. Quase sempre a falha "
-        "está no próprio código: encontre a causa e corrija sem tirar nada do que foi pedido. Escreva o "
-        "programa completo em um único bloco ```python.",
-        "Исправь её для Python 3 в Garlic (MicroPython): есть turtle, pygame и tkinter для телевизора "
-        "(стрелки, пробел и Enter — на геймпаде), input(), print(), random, math, time, collections, "
-        "itertools, string и copy; нет numpy, matplotlib, файлов, сети и звука. Почти всегда ошибка в самом "
-        "коде: найди причину и исправь её, ничего не убирая из того, что просили. Напиши всю программу "
-        "целиком в одном блоке ```python."},
-    [S_PY_INPUT] = {"Responde al programa…", "Answer the program…", "Responda ao programa…", "Ответьте программе…"},
-    [S_VOICE_MODE] = {"Modo voz", "Voice mode", "Modo voz", "Голосовой режим"},
-    [S_THINKING] = {"Pensando…", "Thinking…", "Pensando…", "Думаю…"},
-    [S_LISTENING_SHORT] = {"Te escucho…", "Listening…", "Estou ouvindo…", "Слушаю…"},
-    [S_VOICE_LOADING] = {"Preparando la voz…", "Getting the voice ready…", "Preparando a voz…", "Готовлю голос…"},
-    [S_VOICE_NO_TTS] = {"La voz no está disponible: Garlic responderá con texto", "The voice is not available: Garlic will answer in text",
-                        "A voz não está disponível: o Garlic responderá em texto", "Голос недоступен: Garlic ответит текстом"},
-    // "Think" (R3)
-    [S_THINK_OFF_HINT] = {"Pensar: no", "Think: off", "Pensar: não", "Думать: нет"},
-    [S_THINK_ON_HINT] = {"Pensar: sí", "Think: on", "Pensar: sim", "Думать: да"},
-    [S_THINK_ON_TOAST] = {"Pensar activado: más acierto en preguntas difíciles, pero tarda ~1 min",
-                          "Thinking on: better at hard questions, but takes ~1 min",
-                          "Pensar ativado: acerta mais em perguntas difíceis, mas demora ~1 min",
-                          "Размышление включено: точнее в трудных вопросах, но около минуты"},
-    [S_THINK_OFF_TOAST] = {"Pensar desactivado: respuestas al momento", "Thinking off: instant answers",
-                           "Pensar desativado: respostas na hora", "Размышление выключено: ответы сразу"},
-    [S_THOUGHT] = {"Pensó %d s · %d tokens", "Thought for %d s · %d tokens", "Pensou %d s · %d tokens",
-                   "Думал %d с · токенов: %d"},
-    [S_THINK_CUT] = {"tope alcanzado", "limit reached", "limite atingido", "лимит"},
-    [S_THINK_CHIP] = {"Pensar", "Think", "Pensar", "Думать"},
-    // The OpenAI-compatible API (L3). The toast that turns it on is followed by its address: "API on: http://..."
-    [S_API_ON] = {"API encendida", "API on", "API ligada", "API включён"},
-    [S_API_OFF] = {"API apagada", "API off", "API desligada", "API выключен"},
-    [S_API_FAILED] = {"La API no pudo iniciarse: revisa la red de la consola",
-                      "The API could not start: check the console's network",
-                      "A API não pôde iniciar: verifique a rede do console",
-                      "Не удалось запустить API: проверьте сеть консоли"},
-    [S_API_BUSY] = {"Respondiendo a una petición de la API…", "Answering an API request…",
-                    "Respondendo a uma requisição da API…", "Отвечаю на запрос API…"},
-    [S_API_DONE] = {"Respondí una petición de la API; empiezo una conversación nueva.",
-                    "I answered an API request; starting a new conversation.",
-                    "Respondi a uma requisição da API; começando uma nova conversa.",
-                    "Ответил на запрос API; начинаю новый разговор."},
-};
+#include "ui_strings.inc"
 
 const char* tr(StrId id) { return strings[id][ui_lang] ? strings[id][ui_lang] : strings[id][LANG_EN]; }
 
+// OrbisSystemParamLanguage (orbis/_types/sys_service.h): 0 Japanese, 1 English (US), 2 French, 3 Spanish, 4 German,
+// 7 Portuguese (Portugal), 8 Russian, 9 Korean, 10 Chinese (Traditional), 11 Chinese (Simplified), 17 Portuguese
+// (Brazil), 18 English (UK), 20 Spanish (Latin America), 21 Arabic, 22 French (Canada). The rest: English.
 int lang_from_system(int l) {
-    if (l == 3 || l == 20) return LANG_ES;   // Spanish, Spanish (Latin America)
-    if (l == 7 || l == 17) return LANG_PT;   // Portuguese (Portugal, Brazil)
-    if (l == 8) return LANG_RU;
-    return LANG_EN;
+    switch (l) {
+    case 0: return LANG_JA;
+    case 2: case 22: return LANG_FR;
+    case 3: case 20: return LANG_ES;
+    case 4: return LANG_DE;
+    case 7: case 17: return LANG_PT;
+    case 8: return LANG_RU;
+    case 9: return LANG_KO;
+    case 10: return LANG_ZH_HANT;
+    case 11: return LANG_ZH_HANS;
+    case 21: return LANG_AR;
+    default: return LANG_EN;
+    }
 }
+
+int lang_rtl(int lang) { return lang == LANG_AR; }
 
 // ---- pixels and shapes -------------------------------------------------------------------------------------------
 
@@ -1853,6 +1728,11 @@ static const char* kb_layouts[N_KB_LAYOUTS][KB_ROWS][KB_COLS] = {
 static const char* kb_names[N_KB_LAYOUTS] = {"ES", "EN", "PT", "RU"};
 static const char* kb_dead[N_KB_LAYOUTS][4] = {[KB_ES] = {"´"}, [KB_PT] = {"´", "~", "^", "`"}};
 
+int kb_layout_for(int lang) {   // (Chinese, Japanese, Korean, French, German and Arabic: English for now)
+    static const int map[N_LANGS] = {KB_ES, KB_EN, KB_PT, KB_RU, KB_EN, KB_EN, KB_EN, KB_EN, KB_EN, KB_EN, KB_EN};
+    return lang >= 0 && lang < N_LANGS ? map[lang] : KB_EN;
+}
+
 static int is_dead(int layout, const char* key) {
     for (int i = 0; i < 4 && kb_dead[layout][i]; i++)
         if (!strcmp(kb_dead[layout][i], key)) return 1;
@@ -1863,16 +1743,6 @@ static int is_dead(int layout, const char* key) {
 static const char* kb_emoji_bar[KB_COLS] = {"[abc]", "[abc]", "[t0]", "[t1]", "[t2]", "[t3]", "[t4]",
                                             "[t5]", "[t6]", "⌫", "⏎", "⏎"};
 _Static_assert(EMOJI_ROWS == KB_ROWS - 1 && EMOJI_COLS == KB_COLS && EMOJI_PAGES == 7, "emoji layout");
-static const char* emoji_titles[N_LANGS][EMOJI_PAGES] = {
-    {"Caras", "Gestos y personas", "Animales y naturaleza", "Comida y bebida", "Actividades y viajes", "Objetos",
-     "Corazones y símbolos"},
-    {"Smileys", "Gestures & people", "Animals & nature", "Food & drink", "Activities & travel", "Objects",
-     "Hearts & symbols"},
-    {"Carinhas", "Gestos e pessoas", "Animais e natureza", "Comida e bebida", "Atividades e viagens", "Objetos",
-     "Corações e símbolos"},
-    {"Смайлики", "Жесты и люди", "Животные и природа", "Еда и напитки", "Занятия и путешествия", "Предметы",
-     "Сердца и символы"},
-};
 
 static const char* kb_key(const Kb* kb, int row, int col) {
     if (kb->page == 0) return kb_layouts[kb->layout][row][col];

@@ -1233,7 +1233,7 @@ static void draw_kb_under(void) { draw_keyboard(&kb, kb_text, now()); }
 // out already holds text to edit.
 static int keyboard_ex(char* out, int max, int keep, int over_current) {
     static int ready;
-    if (!ready) kb_init(&kb, ui_lang), ready = 1;   // KB_* follow LANG_*: the console's language first
+    if (!ready) kb_init(&kb, kb_layout_for(ui_lang)), ready = 1;   // the console's language first
     if (!keep) out[0] = 0;
     kb_text = out;
     if (!over_current) {
