@@ -38,7 +38,7 @@
 #define IM_END eng.im_end
 #define THINK 248068u           // Qwen3.5 <think> and </think>: an empty block = answer without thinking
 #define THINK_END 248069u
-#define MODEL_NAME (eng.qwen35 ? (eng.hidden >= 4096 ? "Qwen3.5-9B" : "Qwen3.5-4B") : "Qwen3-4B")
+#define MODEL_NAME (eng.qwen35 ? (eng.hidden >= 4096 ? "Abliterated Qwen3.5-9B" : "Qwen3.5-4B") : "Qwen3-4B")
 #define MAX_REPLY 3000
 // One log per app (so that opening the other app does not lose this one's log), and the one before it
 #if defined(GARLIC_4B)

@@ -36,7 +36,7 @@ A build of this branch with the abliterated 9B weights inside produced:
 
 | File | Bytes | SHA-256 |
 |---|---:|---|
-| `IV0000-PSAI00001_00-PS4LOCALAICHAT01.pkg` | 4,898,750,464 | `c1ec4183083186c09eb6a69e2a909766e7c45dce276520474e26c2adecc04817` |
+| `IV0000-PSAI00001_00-PS4LOCALAICHAT01.pkg` | 4,898,750,464 | `c8b39cf2908f1f3d4ebc971ad8aeec854d4a8f495bdce8b0539572f9317b836e` |
 
 That file is too large for a GitHub release. The release asset `DarkGarlic-LLM-1.20.pkg` (41,091,072 bytes, SHA-256 `0354ce449ba522d4c590f0c781e0f877eaa2246c88ee227ec4831c5e1379af32`) is the same app with no weights, for people who upload the bins to `/data` themselves.
 
@@ -51,7 +51,7 @@ The upstream all-in-one package will not load these files. `chat/engine.c` opens
 
 Voice is separate. These scripts do not convert Parakeet or Chatterbox. Copy `parakeet-v3-q4i.bin`, `chatterbox-t3.bin` and `chatterbox-s3gen-mf.bin` out of the upstream package into `/data` if you want dictation and speech. Text chat and the API work without them.
 
-Press L3 on the chat screen. The header shows `API · <console-ip>:8080`. `GET /health` returns `{"status":"ok"}`. The model id is still `Qwen3.5-9B`.
+Press L3 on the chat screen. The header shows `API · <console-ip>:8080`. `GET /health` returns `{"status":"ok"}`. The on-screen model line is `Abliterated Qwen3.5-9B on your PS4's GPU.` The API model id is `Abliterated Qwen3.5-9B`.
 
 ## Known limits
 
