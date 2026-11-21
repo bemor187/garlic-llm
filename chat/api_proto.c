@@ -401,6 +401,39 @@ int api_message(const JNode* pool, int msg, char* role, size_t rcap, Sb* out) {
     return 0;
 }
 
+static int is_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
+
+int api_think_switch(Sb* text) {
+    static const struct {
+        const char* word;
+        int on;
+    } words[] = {{"/no_think", 0}, {"/nothink", 0}, {"/think", 1}};
+    size_t n = text->n;
+    while (n && is_space(text->p[n - 1])) n--;
+    for (size_t w = 0; w < sizeof(words) / sizeof(words[0]); w++) {
+        size_t k = strlen(words[w].word);
+        if (n < k || memcmp(text->p + n - k, words[w].word, k)) continue;
+        if (n > k && !is_space(text->p[n - k - 1])) continue;   // (part of a longer word or path, not the switch)
+        n -= k;
+        while (n && is_space(text->p[n - 1])) n--;
+        text->n = n;
+        text->p[n] = 0;
+        return words[w].on;
+    }
+    return -1;
+}
+
+void api_drop_think(Sb* text) {
+    if (!text->p) return;
+    const char* end = NULL;
+    for (const char* f = text->p; (f = strstr(f, "</think>")) != NULL; f += 8) end = f + 8;
+    if (!end) return;
+    while (*end == '\n' || *end == '\r') end++;
+    size_t k = (size_t)(end - text->p);
+    memmove(text->p, end, text->n - k + 1);
+    text->n -= k;
+}
+
 // ---- JSON writers -------------------------------------------------------------------------------------------------
 
 void api_json_models(Sb* out, const char* model, long long created) {
@@ -411,8 +444,9 @@ void api_json_models(Sb* out, const char* model, long long created) {
     sb_str(out, ",\"owned_by\":\"garlic-llm\"}]}");
 }
 
-void api_json_completion(Sb* out, const char* id, const char* model, long long created, const char* text, size_t tlen,
-                         const char* finish, int prompt_tokens, int completion_tokens) {
+void api_json_completion(Sb* out, const char* id, const char* model, long long created, const char* reasoning,
+                         size_t rlen, const char* text, size_t tlen, const char* finish, int prompt_tokens,
+                         int completion_tokens, int reasoning_tokens) {
     sb_str(out, "{\"id\":");
     sb_json_str(out, id, strlen(id));
     sb_str(out, ",\"object\":\"chat.completion\",\"created\":");
@@ -421,6 +455,10 @@ void api_json_completion(Sb* out, const char* id, const char* model, long long c
     sb_json_str(out, model, strlen(model));
     sb_str(out, ",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":");
     sb_json_str(out, text, tlen);
+    if (rlen) {
+        sb_str(out, ",\"reasoning_content\":");
+        sb_json_str(out, reasoning, rlen);
+    }
     sb_str(out, "},\"finish_reason\":");
     sb_json_str(out, finish, strlen(finish));
     sb_str(out, "}],\"usage\":{\"prompt_tokens\":");
@@ -429,11 +467,16 @@ void api_json_completion(Sb* out, const char* id, const char* model, long long c
     sb_int(out, completion_tokens);
     sb_str(out, ",\"total_tokens\":");
     sb_int(out, prompt_tokens + completion_tokens);
+    if (reasoning_tokens) {
+        sb_str(out, ",\"completion_tokens_details\":{\"reasoning_tokens\":");
+        sb_int(out, reasoning_tokens);
+        sb_str(out, "}");
+    }
     sb_str(out, "}}");
 }
 
-void api_json_chunk(Sb* out, const char* id, const char* model, long long created, const char* role, const char* text,
-                    size_t tlen, const char* finish) {
+void api_json_chunk(Sb* out, const char* id, const char* model, long long created, const char* role,
+                    const char* reasoning, size_t rlen, const char* text, size_t tlen, const char* finish) {
     sb_str(out, "{\"id\":");
     sb_json_str(out, id, strlen(id));
     sb_str(out, ",\"object\":\"chat.completion.chunk\",\"created\":");
@@ -445,6 +488,12 @@ void api_json_chunk(Sb* out, const char* id, const char* model, long long create
     if (role) {
         sb_str(out, "\"role\":");
         sb_json_str(out, role, strlen(role));
+        any = 1;
+    }
+    if (rlen) {
+        if (any) sb_str(out, ",");
+        sb_str(out, "\"reasoning_content\":");
+        sb_json_str(out, reasoning, rlen);
         any = 1;
     }
     if (tlen) {
@@ -528,6 +577,22 @@ int api_chat_parse(const char* body, size_t len, JNode* pool, int max, ChatReque
     if (sd >= 0 && pool[sd].type == J_NUM && pool[sd].num >= 0) {
         req->seed = (unsigned)pool[sd].num;
         req->has_seed = 1;
+    }
+    // reasoning: the chat template's switch (as clients of other servers send it), then the plainer spellings
+    req->think = -1;
+    int kw = json_get(pool, req->root, "chat_template_kwargs");
+    int et = kw >= 0 && pool[kw].type == J_OBJ ? json_get(pool, kw, "enable_thinking") : -1;
+    if (et < 0 || pool[et].type != J_BOOL) et = json_get(pool, req->root, "enable_thinking");
+    if (et < 0 || pool[et].type != J_BOOL) et = json_get(pool, req->root, "think");
+    if (et >= 0 && pool[et].type == J_BOOL) {
+        req->think = pool[et].b;
+    } else {
+        int re = json_get(pool, req->root, "reasoning_effort");
+        if (re >= 0 && pool[re].type == J_STR) {
+            int off = (pool[re].slen == 4 && !memcmp(pool[re].s, "none", 4)) ||
+                      (pool[re].slen == 7 && !memcmp(pool[re].s, "minimal", 7));
+            req->think = !off;
+        }
     }
     return 0;
 }

@@ -4,7 +4,7 @@
     "title": "Garlic LLM API",
     "version": "1.20",
     "summary": "OpenAI-compatible chat API for Garlic LLM, running on a PlayStation 4.",
-    "description": "Garlic LLM runs Qwen3.5 on the PS4's own GPU. This API speaks the OpenAI Chat Completions protocol, so existing OpenAI client libraries work by changing the base URL to http://<console-address>:8080/v1.\n\nThe API is off until it is turned on with L3 on the console's chat screen, which then shows the address.\n\nOne request runs at a time; a request sent meanwhile waits for it. While the model answers, the console's screen says so and the conversation that was on it is cleared. Circle on the controller stops the reply: the client gets what was written so far, with finish_reason \"length\".\n\nReasoning is always off. Parameters the console does not implement (for example tools, logprobs, presence_penalty) are ignored. Only n = 1 is supported.",
+    "description": "Garlic LLM runs Qwen3.5 on the PS4's own GPU. This API speaks the OpenAI Chat Completions protocol, so existing OpenAI client libraries work by changing the base URL to http://<console-address>:8080/v1.\n\nThe API is off until it is turned on with L3 on the console's chat screen, which then shows the address.\n\nOne request runs at a time; requests sent meanwhile wait their turn, up to 8 in all (more get 503). While the model answers, the console's screen says so and the conversation that was on it is cleared. Circle on the controller stops the reply: the client gets what was written so far, with finish_reason \"length\".\n\nReasoning follows the console's think mode unless the request chooses: the last message may end with /think or /no_think, or the request may set chat_template_kwargs.enable_thinking. The reasoning comes apart from the answer, in reasoning_content. Parameters the console does not implement (for example tools, logprobs, presence_penalty) are ignored. Only n = 1 is supported.",
     "license": { "name": "GPL-3.0", "url": "https://github.com/leonardo-alegria/garlic-llm/blob/main/LICENSE" }
   },
   "servers": [
@@ -155,11 +155,19 @@
           "model": { "type": "string", "description": "Accepted and ignored: the console runs the one model it has (see GET /v1/models)." },
           "messages": { "type": "array", "minItems": 1, "items": { "$ref": "#/components/schemas/Message" } },
           "temperature": { "type": "number", "minimum": 0, "maximum": 2, "default": 0.7, "description": "0 = always the most likely token." },
-          "max_tokens": { "type": "integer", "minimum": 1, "maximum": 16384, "default": 512 },
+          "max_tokens": { "type": "integer", "minimum": 1, "maximum": 16384, "default": 512, "description": "Tokens of the answer; the reasoning has its own limit (1024 by default)." },
           "max_completion_tokens": { "type": "integer", "minimum": 1, "maximum": 16384, "description": "Same as max_tokens; it wins when both are given." },
           "stream": { "type": "boolean", "default": false },
           "seed": { "type": "integer", "minimum": 0, "description": "Makes the sampling repeatable." },
-          "n": { "type": "integer", "const": 1, "default": 1 }
+          "n": { "type": "integer", "const": 1, "default": 1 },
+          "chat_template_kwargs": {
+            "type": "object",
+            "properties": {
+              "enable_thinking": { "type": "boolean", "description": "true: the model reasons before it answers; false: it answers at once. Without it the console's think mode decides." }
+            }
+          },
+          "enable_thinking": { "type": "boolean", "description": "Same as chat_template_kwargs.enable_thinking." },
+          "reasoning_effort": { "type": "string", "description": "\"none\" or \"minimal\": no reasoning; any other value: reasoning. Used when enable_thinking is not given." }
         }
       },
       "Usage": {
@@ -167,8 +175,13 @@
         "required": ["prompt_tokens", "completion_tokens", "total_tokens"],
         "properties": {
           "prompt_tokens": { "type": "integer" },
-          "completion_tokens": { "type": "integer" },
-          "total_tokens": { "type": "integer" }
+          "completion_tokens": { "type": "integer", "description": "The answer's tokens and the reasoning's." },
+          "total_tokens": { "type": "integer" },
+          "completion_tokens_details": {
+            "type": "object",
+            "description": "Only when the model reasoned.",
+            "properties": { "reasoning_tokens": { "type": "integer" } }
+          }
         }
       },
       "ChatCompletion": {
@@ -191,7 +204,8 @@
                   "required": ["role", "content"],
                   "properties": {
                     "role": { "type": "string", "const": "assistant" },
-                    "content": { "type": "string" }
+                    "content": { "type": "string" },
+                    "reasoning_content": { "type": "string", "description": "The reasoning before the answer, when the model reasoned." }
                   }
                 },
                 "finish_reason": { "type": "string", "enum": ["stop", "length"] }
@@ -220,6 +234,7 @@
                   "type": "object",
                   "properties": {
                     "role": { "type": "string", "const": "assistant" },
+                    "reasoning_content": { "type": "string", "description": "A piece of the reasoning; these come before the answer's." },
                     "content": { "type": "string" }
                   }
                 },

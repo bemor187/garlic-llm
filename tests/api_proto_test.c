@@ -115,19 +115,96 @@ static void test_chat(void) {
     }
 }
 
+// The request's reasoning fields: the chat template's switch first, then the plainer spellings; none = -1.
+static void test_think_fields(void) {
+    JNode pool[API_MAX_NODES];
+    ChatRequest req;
+    const char* err = NULL;
+    static const struct {
+        const char* extra;
+        int think;
+    } cases[] = {
+        {"", -1},
+        {",\"chat_template_kwargs\":{\"enable_thinking\":true}", 1},
+        {",\"chat_template_kwargs\":{\"enable_thinking\":false}", 0},
+        {",\"enable_thinking\":true", 1},
+        {",\"think\":false", 0},
+        {",\"reasoning_effort\":\"high\"", 1},
+        {",\"reasoning_effort\":\"low\"", 1},
+        {",\"reasoning_effort\":\"none\"", 0},
+        {",\"reasoning_effort\":\"minimal\"", 0},
+        {",\"chat_template_kwargs\":{\"enable_thinking\":false},\"reasoning_effort\":\"high\"", 0},
+        {",\"chat_template_kwargs\":{},\"think\":true", 1},
+        {",\"enable_thinking\":\"yes\"", -1},   // (not a boolean: ignored, as unknown fields are)
+    };
+    char body[256];
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        snprintf(body, sizeof(body), "{\"messages\":[{\"role\":\"user\",\"content\":\"a\"}]%s}", cases[i].extra);
+        CHECK(api_chat_parse(body, strlen(body), pool, API_MAX_NODES, &req, &err) == 0);
+        CHECK(req.think == cases[i].think);
+    }
+}
+
+static int switch_of(const char* in, const char* left, int want) {
+    Sb s;
+    sb_init(&s);
+    sb_str(&s, in);
+    int r = api_think_switch(&s);
+    int ok = r == want && s.n == strlen(left) && (!s.n || !memcmp(s.p, left, s.n));
+    sb_free(&s);
+    return ok;
+}
+
+static int drop_of(const char* in, const char* left) {
+    Sb s;
+    sb_init(&s);
+    sb_str(&s, in);
+    api_drop_think(&s);
+    int ok = s.n == strlen(left) && (!s.n || !strcmp(s.p, left));
+    sb_free(&s);
+    return ok;
+}
+
+static void test_think_text(void) {
+    CHECK(switch_of("Why is the sky blue? /think", "Why is the sky blue?", 1));
+    CHECK(switch_of("Hi /no_think\n", "Hi", 0));
+    CHECK(switch_of("Hi\n/nothink", "Hi", 0));
+    CHECK(switch_of("/think", "", 1));
+    CHECK(switch_of("Hello", "Hello", -1));
+    CHECK(switch_of("look in /usr/think", "look in /usr/think", -1));   // (a path, not the switch)
+    CHECK(switch_of("/think about it", "/think about it", -1));         // (only at the end)
+    CHECK(drop_of("<think>\nfirst this\n</think>\n\nThe answer.", "The answer."));
+    CHECK(drop_of("reasoning without its start</think>\nAnswer", "Answer"));
+    CHECK(drop_of("a</think>b</think>\n\nc", "c"));
+    CHECK(drop_of("No reasoning here.", "No reasoning here."));
+}
+
 static void test_writers(void) {
     Sb s;
     sb_init(&s);
-    api_json_completion(&s, "chatcmpl-1", "Qwen3.5-9B", 1700000000, "Hola \"mundo\"\n", 13, "stop", 5, 4);
+    api_json_completion(&s, "chatcmpl-1", "Qwen3.5-9B", 1700000000, "", 0, "Hola \"mundo\"\n", 13, "stop", 5, 4, 0);
     CHECK(s.p && strstr(s.p, "\"content\":\"Hola \\\"mundo\\\"\\n\"") != NULL);
     CHECK(strstr(s.p, "\"total_tokens\":9") != NULL);
     CHECK(strstr(s.p, "\"finish_reason\":\"stop\"") != NULL);
+    CHECK(strstr(s.p, "reasoning") == NULL);   // (no reasoning: the same JSON as before reasoning existed)
     sb_free(&s);
 
     sb_init(&s);
-    api_json_chunk(&s, "c", "m", 1, "assistant", "", 0, NULL);
+    api_json_completion(&s, "c", "m", 1, "Let me see.", 11, "Yes.", 4, "stop", 5, 30, 26);
+    CHECK(strstr(s.p, "\"message\":{\"role\":\"assistant\",\"content\":\"Yes.\",\"reasoning_content\":\"Let me see.\"}"));
+    CHECK(strstr(s.p, "\"completion_tokens\":30,\"total_tokens\":35,"
+                      "\"completion_tokens_details\":{\"reasoning_tokens\":26}}") != NULL);
+    sb_free(&s);
+
+    sb_init(&s);
+    api_json_chunk(&s, "c", "m", 1, "assistant", "", 0, "", 0, NULL);
     CHECK(!strcmp(s.p, "{\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\","
                        "\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}"));
+    sb_free(&s);
+
+    sb_init(&s);
+    api_json_chunk(&s, "c", "m", 1, NULL, "Hmm", 3, "", 0, NULL);
+    CHECK(strstr(s.p, "\"delta\":{\"reasoning_content\":\"Hmm\"},\"finish_reason\":null") != NULL);
     sb_free(&s);
 
     sb_init(&s);
@@ -146,6 +223,8 @@ int main(void) {
     test_http();
     test_json();
     test_chat();
+    test_think_fields();
+    test_think_text();
     test_writers();
     printf("%d checks, %d failed\n", checks, fails);
     return fails != 0;

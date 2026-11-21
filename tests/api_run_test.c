@@ -44,6 +44,13 @@ static int next_pos, pos_errors;  // where the next token must go; steps given a
 static int fed;                   // tokens of the reply fed to the model
 // what main.c shows of a job: begun and ended (they must pair), and Circle held from stop_at tokens on (-1: never)
 static int chat_begun, chat_ended, chat_replies, stop_at = -1;
+// the console's reasoning setting (R3) and its cap, as main.c has them
+static int think_on, think_cap = 1024;
+#define THINK_T 0.7f
+#define THINK_CLOSE "\n\nConsidering the limited time by the user, I have to give the solution based on the thinking directly now.\n"
+static float first_temp, last_temp;   // the temperature of the prompt, and of the last step
+static int close_fed;                 // ids fed in one go after the prompt (the closing sentence of a cut reasoning)
+static uint32_t prompt_last;          // the prompt's last id
 
 // Scripted reply: the model emits script[k], then IM_END. Tokens 500/501 are the two halves of "é".
 static const uint32_t* script;
@@ -65,6 +72,11 @@ int api_send(int fd, const char* p, size_t n) {
     return 0;
 }
 const char* api_model(void) { return "Qwen3.5-9B"; }
+static int client_left;   // the client of a waiting request has closed its connection
+int api_client_gone(int fd) {
+    (void)fd;
+    return client_left;
+}
 static void say(const char* fmt, ...) {
     (void)fmt;
 }
@@ -108,20 +120,23 @@ static int tok_piece(const Tokenizer* t, uint32_t id, const uint8_t** bytes) {
 
 static int engine_run(MockEngine* e, const uint32_t* tokens, int n, int pos0, float temperature, unsigned sd,
                       uint32_t* next) {
-    (void)temperature;
     (void)sd;
     engine_calls++;
     if (engine_calls == fail_engine_at) {
         snprintf(e->error, sizeof(e->error), "mock GPU fault");
         return -1;
     }
-    if (n > 1) prompt_len_seen = n, next_pos = 0;   // the prompt (fed in one go, from position 0)
-    else fed++;
+    if (pos0 == 0) {   // the prompt (fed in one go, from position 0)
+        prompt_len_seen = n, next_pos = 0, first_temp = temperature, prompt_last = tokens[n - 1];
+    } else {
+        if (n > 1) close_fed++;
+        fed += n;
+    }
+    last_temp = temperature;
     if (pos0 != next_pos) pos_errors++;
     next_pos += n;
     if (script_k < script_len) *next = script[script_k++];
     else *next = IM_END;
-    (void)tokens;
     return 0;
 }
 
@@ -133,8 +148,8 @@ static int spec_active(const MockEngine* e) {
 static int engine_spec_step(MockEngine* e, uint32_t tk, int pos0, float temperature, unsigned sd, int max_new,
                             uint32_t* out, int* n_out, uint32_t* next) {
     (void)tk;
-    (void)temperature;
     (void)sd;
+    last_temp = temperature;
     engine_calls++;
     if (engine_calls == fail_engine_at) {
         snprintf(e->error, sizeof(e->error), "mock GPU fault");
@@ -172,6 +187,7 @@ static void run_job(const char* body, const uint32_t* sc, int sc_len) {
     script_k = 0;
     engine_calls = 0;
     fed = 0;
+    close_fed = 0;
     ApiJob job;
     memset(&job, 0, sizeof(job));
     job.body = (char*)body;
@@ -275,6 +291,13 @@ static void test_client_gone(void) {
     CHECK(engine_calls == 1);                       // the prefill only: no more tokens for a client that left
     CHECK(strstr(wire, "data: [DONE]") == NULL);
     CHECK(pos == 0);
+
+    // a request that waited in line, whose client left before its turn: the model does not read it at all
+    int begun = chat_begun;
+    client_left = 1;
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"x\"}]}", sc, 3);
+    client_left = 0;
+    CHECK(engine_calls == 0 && wire_n == 0 && chat_begun == begun);
 }
 
 // Several tokens per step: the reply is the same, in fewer steps, and never past max_tokens.
@@ -378,6 +401,107 @@ static void test_cut_char(void) {
     CHECK(strstr(wire, "\"content\":\"a\xc3\xa9\"") != NULL);
 }
 
+// ---- reasoning -----------------------------------------------------------------------------------------------------
+// The model reasons "ab", closes </think> itself, writes a blank line and answers "OK".
+static const uint32_t think_sc[] = {'a' + 1, 'b' + 1, THINK_END, '\n' + 1, '\n' + 1, 'O' + 1, 'K' + 1};
+#define THINK_SC_LEN 7
+
+static void test_think_request(void) {
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"temperature\":0.2,"
+            "\"chat_template_kwargs\":{\"enable_thinking\":true}}", think_sc, THINK_SC_LEN);
+    CHECK(strstr(wire, "\"content\":\"OK\",\"reasoning_content\":\"ab\"") != NULL);
+    // the messages (10, see test_completion), then <im_start> "assistant\n" <think> "\n" = 13
+    CHECK(prompt_len_seen == 23 && prompt_last == '\n' + 1);
+    CHECK(strstr(wire, "\"completion_tokens\":4,") != NULL);   // the answer's 2 and the reasoning's 2
+    CHECK(strstr(wire, "\"reasoning_tokens\":2") != NULL);
+    CHECK(strstr(wire, "\"finish_reason\":\"stop\"") != NULL);
+    CHECK(first_temp == THINK_T && last_temp > 0.19f && last_temp < 0.21f);   // reasons at THINK_T, answers at 0.2
+    CHECK(close_fed == 0);   // closed by the model: no closing sentence
+
+    // max_tokens counts the answer only
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":1,\"think\":true}", think_sc,
+            THINK_SC_LEN);
+    CHECK(strstr(wire, "\"content\":\"O\",\"reasoning_content\":\"ab\"") != NULL);
+    CHECK(strstr(wire, "\"finish_reason\":\"length\"") != NULL);
+}
+
+// Who decides: the message's /think or /no_think, then the request, then the console (R3).
+static void test_think_who(void) {
+    think_on = 0;
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi /think\"}]}", think_sc, THINK_SC_LEN);
+    CHECK(prompt_len_seen == 23);   // " /think" is not in the prompt
+    CHECK(strstr(wire, "\"reasoning_content\":\"ab\"") != NULL);
+
+    think_on = 1;
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", think_sc, THINK_SC_LEN);
+    CHECK(prompt_len_seen == 23 && strstr(wire, "\"reasoning_content\":\"ab\"") != NULL);
+
+    static const uint32_t plain[] = {'O' + 1, 'K' + 1};
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi /no_think\"}]}", plain, 2);
+    CHECK(prompt_len_seen == 27 && strstr(wire, "\"content\":\"OK\"}") != NULL);
+    CHECK(strstr(wire, "reasoning") == NULL);
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"chat_template_kwargs\":{\"enable_thinking\":false}}",
+            plain, 2);
+    CHECK(prompt_len_seen == 27 && strstr(wire, "reasoning") == NULL);
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi /think\"}],\"reasoning_effort\":\"none\"}", think_sc,
+            THINK_SC_LEN);
+    CHECK(prompt_len_seen == 23);   // (the message's switch wins)
+    think_on = 0;
+
+    // an earlier message's switch is not this reply's
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"a /think\"},{\"role\":\"assistant\",\"content\":\"b\"},"
+            "{\"role\":\"user\",\"content\":\"c\"}]}", plain, 2);
+    CHECK(strstr(wire, "reasoning") == NULL);
+}
+
+static void test_think_stream(void) {
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":true,\"think\":true}", think_sc,
+            THINK_SC_LEN);
+    const char* ra = strstr(wire, "\"delta\":{\"reasoning_content\":\"a\"}");
+    const char* rb = strstr(wire, "\"delta\":{\"reasoning_content\":\"b\"}");
+    const char* co = strstr(wire, "\"delta\":{\"content\":\"O\"}");
+    CHECK(ra && rb && co && ra < rb && rb < co);
+    CHECK(strstr(wire, "\"content\":\"\\n\"") == NULL);   // the blank line after the reasoning is not sent
+    CHECK(strstr(wire, "\"finish_reason\":\"stop\"") != NULL);
+    CHECK(strstr(wire, "data: [DONE]\n\n") != NULL);
+}
+
+// The reasoning reaches its cap: Qwen's closing sentence and </think> are fed, and the answer follows.
+static void test_think_cut(void) {
+    static uint32_t sc[66];
+    for (int i = 0; i < 65; i++) sc[i] = 'x' + 1;
+    sc[65] = 'Y' + 1;
+    think_cap = 64;
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"think\":true}", sc, 66);
+    think_cap = 1024;
+    static char want[128];
+    memcpy(want, "\"content\":\"Y\",\"reasoning_content\":\"", 36);
+    memset(want + 36, 'x', 64);
+    strcpy(want + 100, "\"");
+    CHECK(strstr(wire, want) != NULL);   // the 64 tokens of the cap; the 65th is not written
+    CHECK(close_fed == 1);
+    CHECK(strstr(wire, "\"reasoning_tokens\":64") != NULL);
+}
+
+// Little room left in the context: the reply comes without reasoning rather than not at all.
+static void test_think_room(void) {
+    static const uint32_t plain[] = {'O' + 1, 'K' + 1};
+    eng.ctx_limit = 150;
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":10,\"think\":true}", plain, 2);
+    eng.ctx_limit = 4096;
+    CHECK(prompt_len_seen == 27 && strstr(wire, "\"content\":\"OK\"}") != NULL);
+}
+
+// Reasoning a client sends back inside an earlier assistant message is not read again.
+static void test_think_history(void) {
+    static const uint32_t plain[] = {'O' + 1, 'K' + 1};
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"q\"},"
+            "{\"role\":\"assistant\",\"content\":\"<think>\\nlong reasoning\\n</think>\\n\\nA\"},"
+            "{\"role\":\"user\",\"content\":\"r\"}]}", plain, 2);
+    // user "q" 9, assistant "A" 14, user "r" 9, the assistant's turn 17
+    CHECK(prompt_len_seen == 49);
+}
+
 static void test_utf8(void) {
     CHECK(api_utf8_whole((const uint8_t*)"\xc3", 1) == 0);
     CHECK(api_utf8_whole((const uint8_t*)"a\xc3", 2) == 1);
@@ -399,6 +523,12 @@ int main(void) {
         test_stop();
         test_long_prompt();
         test_cut_char();
+        test_think_request();
+        test_think_who();
+        test_think_stream();
+        test_think_cut();
+        test_think_room();
+        test_think_history();
         CHECK(pos_errors == 0);           // every token went in at the position after the one before
         CHECK(chat_begun == chat_ended);   // every request that took the screen gave it back
         CHECK(chat_replies <= chat_begun);

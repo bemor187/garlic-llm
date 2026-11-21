@@ -59,16 +59,25 @@ void json_str_sb(const JNode* pool, int node, Sb* out);
 // The text of one chat message: its role (copied into role, NUL-terminated) and its content into out. Content may be
 // a string or an array of parts (their "text" parts are joined). Returns 0, or -1 if the message is malformed.
 int api_message(const JNode* pool, int msg, char* role, size_t rcap, Sb* out);
+// The reasoning switch a user message may end with: "/think" asks for reasoning in this reply, "/no_think" (or
+// "/nothink") for none. It is taken out of text, with the spaces before it. Returns 1, 0, or -1 if there is none.
+int api_think_switch(Sb* text);
+// An earlier assistant message as the model reads it: reasoning a client sent back in the text (anything up to the
+// last "</think>") is left out, as Qwen's chat template leaves it out, with the line breaks after it.
+void api_drop_think(Sb* text);
 
 // ---- JSON writers used by the API ------------------------------------------------------------------------------------
 // The JSON of GET /v1/models: one model, the one loaded.
 void api_json_models(Sb* out, const char* model, long long created);
-// A complete chat.completion (non-streaming).
-void api_json_completion(Sb* out, const char* id, const char* model, long long created, const char* text, size_t tlen,
-                         const char* finish, int prompt_tokens, int completion_tokens);
-// One chat.completion.chunk (streaming). role != NULL: the first chunk, with the role. text may be empty.
-void api_json_chunk(Sb* out, const char* id, const char* model, long long created, const char* role, const char* text,
-                    size_t tlen, const char* finish);
+// A complete chat.completion (non-streaming). The reasoning (rlen > 0) goes in message.reasoning_content, and its
+// tokens, which completion_tokens includes, in usage.completion_tokens_details.reasoning_tokens.
+void api_json_completion(Sb* out, const char* id, const char* model, long long created, const char* reasoning,
+                         size_t rlen, const char* text, size_t tlen, const char* finish, int prompt_tokens,
+                         int completion_tokens, int reasoning_tokens);
+// One chat.completion.chunk (streaming). role != NULL: the first chunk, with the role. A piece of the reasoning goes
+// in delta.reasoning_content, a piece of the answer in delta.content; either may be empty.
+void api_json_chunk(Sb* out, const char* id, const char* model, long long created, const char* role,
+                    const char* reasoning, size_t rlen, const char* text, size_t tlen, const char* finish);
 // The error object: {"error": {"message", "type", "code"}}.
 void api_json_error(Sb* out, const char* message, const char* type, const char* code);
 
@@ -83,6 +92,9 @@ typedef struct {
     int stream;                 // 0 or 1
     unsigned seed;              // default 0 = the engine's own seed
     int has_seed;
+    // Reasoning asked for by the request: 1 or 0 from chat_template_kwargs.enable_thinking, enable_thinking, think
+    // or reasoning_effort ("none" and "minimal" mean 0); -1 if none of them (the console's own setting decides).
+    int think;
 } ChatRequest;
 
 // Reads a chat.completions body. Returns 0 if valid (fills req; messages are pool nodes, each an object with role
