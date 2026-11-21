@@ -33,12 +33,12 @@ Do not say this fork wrote the PS4 GPU path, invented running a language model o
 |---|---|
 | Local path | `D:\garlic-build\DarkGarlic-LLM-1.20-full.pkg` |
 | Also at | `C:\Users\NewAdmin\garlic-llm\build\chat\IV0000-PSAI00001_00-PS4LOCALAICHAT01.pkg` |
-| Bytes | 4,898,750,464 |
-| SHA-256 | `c8b39cf2908f1f3d4ebc971ad8aeec854d4a8f495bdce8b0539572f9317b836e` |
+| Bytes | 5,662,638,080 |
+| SHA-256 | `c387e47009a2a2aeb1a36bf1952ec044a44af7c55751e33e02e6c4000a67bdd3` |
 | Title | DarkGarlic LLM |
 | Version | 1.20 |
 | Title id | `PSAI00001` (installs over Garlic LLM) |
-| Inside | `qwen3.5-9b-q4s.bin` and `qwen3.5-9b-mtp.bin` |
+| Inside | `qwen3.5-9b-q4s.bin`, `qwen3.5-9b-mtp.bin`, `parakeet-v3-q4i.bin`, `chatterbox-t3.bin`, `chatterbox-s3gen-mf.bin` |
 
 Public download: https://huggingface.co/bemor187/darkgarlic-llm-ps4
 
@@ -67,7 +67,7 @@ Loose weights, already inside the full package:
 
 - Text chat and the OpenAI-compatible API, offline, on the console GPU.
 - Speculative decoding with the converted MTP head.
-- Dictation and spoken replies are not in this package. Parakeet and Chatterbox were not packed. Voice stays off unless those three files are copied in from the upstream Garlic LLM package: `parakeet-v3-q4i.bin`, `chatterbox-t3.bin`, `chatterbox-s3gen-mf.bin`.
+- Dictation and spoken replies are in the package: Parakeet TDT 0.6B v3 and Chatterbox, the same files as upstream Garlic LLM. Hold square to talk.
 - The owner has run this build and says it is fully functional. This brief has no new tokens-per-second measurement for the abliterated weights.
 
 Upstream Garlic LLM, measured by Leonardo Alegría on the original Qwen weights, reports about 31–39 tokens/s in chat and up to 43 tokens/s on code, on a base or Slim PS4. Treat those as his figures for his build. The quant layout matches, so the speed should be in that neighborhood, but do not present them as a new DarkGarlic benchmark.
@@ -88,7 +88,7 @@ Attach a photo of the TV showing the line "Abliterated Qwen3.5-9B on your PS4's 
 
 ## Paste-ready reply
 
-> DarkGarlic is a fork of Leonardo Alegría's Garlic LLM. Same PS4 package format, with Huihui's abliterated Qwen3.5-9B packed inside. The screen says "Abliterated Qwen3.5-9B on your PS4's GPU." One pkg, GoldHEN console, Package Installer: https://huggingface.co/bemor187/darkgarlic-llm-ps4/resolve/main/DarkGarlic-LLM-1.20-full.pkg. Source: https://github.com/bemor187/garlic-llm/tree/darkgarlic. SHA-256 c8b39cf2908f1f3d4ebc971ad8aeec854d4a8f495bdce8b0539572f9317b836e
+> DarkGarlic is a fork of Leonardo Alegría's Garlic LLM. Same PS4 package format, with Huihui's abliterated Qwen3.5-9B packed inside, plus Parakeet dictation and Chatterbox speech. The screen says "Abliterated Qwen3.5-9B on your PS4's GPU." One pkg, GoldHEN console, Package Installer: https://huggingface.co/bemor187/darkgarlic-llm-ps4/resolve/main/DarkGarlic-LLM-1.20-full.pkg. Source: https://github.com/bemor187/garlic-llm/tree/darkgarlic. SHA-256 c387e47009a2a2aeb1a36bf1952ec044a44af7c55751e33e02e6c4000a67bdd3
 
 ## Rules for the posts
 
@@ -97,7 +97,7 @@ Attach a photo of the TV showing the line "Abliterated Qwen3.5-9B on your PS4's 
 - Include the SHA-256 of the full package.
 - Say GoldHEN is required and that DarkGarlic does not contain an exploit.
 - Say the weights are Huihui's abliteration of Qwen3.5-9B, Apache-2.0.
-- Say voice is not in this package.
+- Say voice is included: hold square to dictate, Chatterbox speaks the reply in seven languages.
 - Say the model can answer things the original Qwen build refuses, because the refusal direction was removed from the weights. Do not demonstrate that with a criminal, exploit, or self-harm request.
 - Do not promise a tokens-per-second number for this build.
 - Do not tell anyone how to jailbreak a console.

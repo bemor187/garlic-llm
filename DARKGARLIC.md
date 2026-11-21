@@ -30,13 +30,13 @@ python pc/convert_9b_q4s.py --mtp
 
 ## Install
 
-`python build_chat.py --full` puts `qwen3.5-9b-q4s.bin` and `qwen3.5-9b-mtp.bin` inside the package at `/app0/models`. Nothing else has to be copied to `/data` for text chat and the API. Voice files are packed too when they are already in `models/`.
+`python build_chat.py --full` puts the chat weights and, when they are in `models/`, the three voice files inside the package at `/app0/models`. The current all-in-one package includes Parakeet and Chatterbox. Nothing else has to be copied to `/data`.
 
 A build of this branch with the abliterated 9B weights inside produced:
 
 | File | Bytes | SHA-256 |
 |---|---:|---|
-| `IV0000-PSAI00001_00-PS4LOCALAICHAT01.pkg` | 4,898,750,464 | `c8b39cf2908f1f3d4ebc971ad8aeec854d4a8f495bdce8b0539572f9317b836e` |
+| `IV0000-PSAI00001_00-PS4LOCALAICHAT01.pkg` | 5,662,638,080 | `c387e47009a2a2aeb1a36bf1952ec044a44af7c55751e33e02e6c4000a67bdd3` |
 
 Public download: https://huggingface.co/bemor187/darkgarlic-llm-ps4
 
@@ -53,7 +53,7 @@ python pc/upload_model.py models/qwen3.5-9b-q4s.bin models/qwen3.5-9b-mtp.bin
 
 The upstream all-in-one package will not load these files. `chat/engine.c` opens `/app0/models/<name>` first and only then `/data`. Copying the bins to `/data` on a console that already has the official 1.20 package leaves you on the original Qwen weights.
 
-Voice is separate. These scripts do not convert Parakeet or Chatterbox. Copy `parakeet-v3-q4i.bin`, `chatterbox-t3.bin` and `chatterbox-s3gen-mf.bin` out of the upstream package into `/data` if you want dictation and speech. Text chat and the API work without them.
+The published package also contains `parakeet-v3-q4i.bin` (355,340,032 bytes), `chatterbox-t3.bin` (308,844,544 bytes), and `chatterbox-s3gen-mf.bin` (99,145,088 bytes), copied from the upstream 1.20 package. Their sizes match `asr.idx`, `t3.idx`, and `s3g.idx`. These scripts do not convert Parakeet or Chatterbox. A `--full` build packs whatever of those three files is already in `models/`.
 
 Press L3 on the chat screen. The header shows `API · <console-ip>:8080`. `GET /health` returns `{"status":"ok"}`. The on-screen model line is `Abliterated Qwen3.5-9B on your PS4's GPU.` The API model id is `Abliterated Qwen3.5-9B`.
 
