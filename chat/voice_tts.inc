@@ -64,11 +64,16 @@ static void tts_boot(void) {
     uint8_t* rs = read_all(ASSETS "/ru_stress.bin", &n);
     if (rs && !rustress_load(&ru_stress, rs, n)) tts_tok.ru = &ru_stress;
     else say("voice: ru_stress.bin missing, Russian without stress marks");
+    // Japanese kanji readings (as the official tokenizer's pykakasi); only the index is in memory
+    static JaKana ja_kana;
+    if (!jakana_open(&ja_kana, ASSETS "/ja_kana.bin")) tts_tok.ja = &ja_kana;
+    else say("voice: ja_kana.bin missing, Japanese kanji are not read");
     if (!eng.t3.ready || s3g_init(&eng, ASSETS)) {
         say("voice: T3 %d, S3Gen %s", eng.t3.ready, eng.s3.ready ? "ok" : eng.error);
         return;
     }
-    say("voice: %d S3Gen voices, Russian stress dictionary %u forms", eng.s3.nvoice, ru_stress.n_keys);
+    say("voice: %d S3Gen voices, Russian stress dictionary %u forms, Japanese dictionary %u words", eng.s3.nvoice,
+        ru_stress.n_keys, ja_kana.n_words);
     // T3 reads each piece's prompt in batches of up to 32 positions, in Parakeet's work buffers (idle while T3
     // runs, as for S3Gen)
     t3_scratch(&eng, eng.asr.ws_begin, eng.asr.ws_end - eng.asr.ws_begin);

@@ -31,6 +31,7 @@ Garlic LLM's own code is licensed under the GNU General Public License v3.0 (see
 | Text fonts, converted to bitmaps | Selawik (Microsoft), Noto Sans, Noto Sans Symbols, Noto Sans Symbols 2, Noto Sans Math, Noto Music, Noto Sans SC, Noto Sans KR, Arimo, Inconsolata, Cascadia Mono (Microsoft) | SIL Open Font License 1.1 |
 | Symbol font, converted to bitmaps | DejaVu Sans 2.37 | Bitstream Vera licence and public domain |
 | Russian stress dictionary (`ru_stress.bin`) | Built with [russian-text-stresser](https://github.com/Vuizur/add-stress-to-epub) by Hannes Krumbiegel (GPLv3), which uses Wiktionary data (CC BY-SA). Word frequencies from [FrequencyWords](https://github.com/hermitdave/FrequencyWords) (OpenSubtitles 2018; CC BY-SA 4.0). | GPLv3 and CC BY-SA |
+| Japanese kanji readings (`ja_kana.bin`) | The dictionary of [pykakasi](https://codeberg.org/miurahr/pykakasi) 2.3.0 by Hiroshi Miura and contributors: the KAKASI dictionary (Hironobu Takahashi, Masahiko Sato and others, made from the SKK dictionary) and part of [UniDic](https://clrd.ninjal.ac.jp/unidic/) (The UniDic Consortium). Converted to a compact table (`pc/export_ja_kana.py`). | GPL-3.0-or-later (KAKASI: GPL-2.0-or-later; UniDic: GPL-2.0, LGPL-2.1 or BSD-3-Clause) |
 | Language identifier (`chat/lang_id_table.h`) | Character n-gram statistics computed from Wikipedia text | CC BY-SA |
 | Tokenizer tables | From the Qwen3.5, Chatterbox and Parakeet releases | As their models |
 
