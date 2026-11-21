@@ -28,7 +28,7 @@ Garlic LLM's own code is licensed under the GNU General Public License v3.0 (see
 | Data | Source | Licence |
 |---|---|---|
 | Emoji images | [Twemoji](https://github.com/jdecked/twemoji) 16.0.1, Copyright 2019 Twitter, Inc. and other contributors. Images scaled. | CC-BY-4.0 |
-| Text fonts, converted to bitmaps | Selawik (Microsoft), Noto Sans, Noto Sans Symbols, Noto Sans Symbols 2, Noto Sans Math, Noto Music, Noto Sans SC, Noto Sans KR, Arimo, Inconsolata, Cascadia Mono (Microsoft) | SIL Open Font License 1.1 |
+| Text fonts, converted to bitmaps | Selawik (Microsoft), Noto Sans, Noto Sans Arabic, Noto Sans Symbols, Noto Sans Symbols 2, Noto Sans Math, Noto Music, Noto Sans SC, Noto Sans TC, Noto Sans JP, Noto Sans KR, Arimo, Inconsolata, Cascadia Mono (Microsoft) | SIL Open Font License 1.1 |
 | Symbol font, converted to bitmaps | DejaVu Sans 2.37 | Bitstream Vera licence and public domain |
 | Russian stress dictionary (`ru_stress.bin`) | Built with [russian-text-stresser](https://github.com/Vuizur/add-stress-to-epub) by Hannes Krumbiegel (GPLv3), which uses Wiktionary data (CC BY-SA). Word frequencies from [FrequencyWords](https://github.com/hermitdave/FrequencyWords) (OpenSubtitles 2018; CC BY-SA 4.0). | GPLv3 and CC BY-SA |
 | Language identifier (`chat/lang_id_table.h`) | Character n-gram statistics computed from Wikipedia text | CC BY-SA |
