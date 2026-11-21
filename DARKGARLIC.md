@@ -1,0 +1,60 @@
+# DarkGarlic LLM
+
+A fork of [Garlic LLM](https://github.com/leonardo-alegria/garlic-llm) by Leonardo Alegría. The app code is GPLv3. The converted checkpoint is [`huihui-ai/Huihui-Qwen3.5-9B-abliterated`](https://huggingface.co/huihui-ai/Huihui-Qwen3.5-9B-abliterated) (Apache-2.0), the same `Qwen3_5ForConditionalGeneration` layout as `Qwen/Qwen3.5-9B`: 32 layers, hidden size 4096, vocab 248320, one MTP layer.
+
+The screen is black, white and red. The mark is a white garlic in a black cape with a red lining and two fangs. The home-screen title is **DarkGarlic LLM**. The title id is still `PSAI00001`, so this package installs over Garlic LLM.
+
+## Weights
+
+Git does not contain the weights (`models/` is ignored, and GitHub will not take a 4.6 GB file). A converted pair that matches the `model.idx` shipped in this branch:
+
+| File | Bytes | SHA-256 |
+|---|---:|---|
+| `qwen3.5-9b-q4s.bin` | 4,641,752,088 | `4e15041f0ded0ccb2cfd55c24644bae3947b35af9db7a39809c6a9ddea1b2b31` |
+| `qwen3.5-9b-mtp.bin` | 212,420,608 | `881482286945e0b3252a5dda58f4e7a2f22f41b1733b2aff0bdb408a8c2987fc` |
+
+Gate and up projections are 3-bit on all 32 layers. The output head keeps 248,070 token rows, the same `pc/vocab_order.npy` as upstream, which is why `chat/assets_9b/model.idx` and `mtp.idx` did not have to change.
+
+Rebuild them:
+
+```bash
+hf download huihui-ai/Huihui-Qwen3.5-9B-abliterated --local-dir hf/Huihui-Qwen3.5-9B-abliterated
+python pc/local_qwen35_9b.py --snapshot hf/Huihui-Qwen3.5-9B-abliterated
+mkdir models\Huihui-Qwen3.5-9B-abliterated
+copy /Y hf\Huihui-Qwen3.5-9B-abliterated\model.safetensors.index.json models\Huihui-Qwen3.5-9B-abliterated\
+python pc/convert_9b_q4s.py
+python pc/convert_9b_q4s.py --mtp
+```
+
+`local_qwen35_9b.py` needs `numpy` only. It reads BF16 and the few F32 tensors (the `A_log` vectors) straight out of the safetensors shards and quantizes in row chunks, so it does not need the 64 GB Modal machine. Do not pass `--q3=none` to `convert_9b_q4s.py`: that makes a larger file than the console has room for. Do not start from a GGUF.
+
+## Install
+
+The package from `python build_chat.py` (no `--full`) does not contain the weights. The app then reads `/data/qwen3.5-9b-q4s.bin` and `/data/qwen3.5-9b-mtp.bin`.
+
+A build of this branch produced:
+
+| File | Bytes | SHA-256 |
+|---|---:|---|
+| `IV0000-PSAI00001_00-PS4LOCALAICHAT01.pkg` | 41,091,072 | `0354ce449ba522d4c590f0c781e0f877eaa2246c88ee227ec4831c5e1379af32` |
+
+Title `DarkGarlic LLM`, version 1.20, title id `PSAI00001`. Install it from a USB drive with *Settings → Debug Settings → Game → Package Installer* on a console that already runs GoldHEN. The USB has to be exFAT.
+
+```bash
+set PS4_IP=192.168.1.5
+python pc/upload_model.py models/qwen3.5-9b-q4s.bin models/qwen3.5-9b-mtp.bin
+```
+
+The upstream all-in-one package will not load these files. `chat/engine.c` opens `/app0/models/<name>` first and only then `/data`. Copying the bins to `/data` on a console that already has the official 1.20 package leaves you on the original Qwen weights.
+
+Voice is separate. These scripts do not convert Parakeet or Chatterbox. Copy `parakeet-v3-q4i.bin`, `chatterbox-t3.bin` and `chatterbox-s3gen-mf.bin` out of the upstream package into `/data` if you want dictation and speech. Text chat and the API work without them.
+
+Press L3 on the chat screen. The header shows `API · <console-ip>:8080`. `GET /health` returns `{"status":"ok"}`. The model id is still `Qwen3.5-9B`.
+
+## Known limits
+
+- The OpenOrbis toolchain, Zig and the .NET runtime are not in this repository. `python build_chat.py` cannot run until `toolchain/` is filled in as the README describes.
+- The abliterated weights drop the refusal direction. They also loop more often than the original. L2 and R2 change the temperature.
+- A cold load on a base PS4 is on the order of 45 seconds. That figure is from upstream issue 9, which ran an abliterated conversion of this same format on firmware 13.52.
+- `/data/ps4ai_log.txt` should contain `weights: /data/qwen3.5-9b-q4s.bin` for a non-packed build. `Couldn't start` means a weight file is missing or short.
+- Russian speech turns the word `DarkGarlic` into `Дарк Гарлик` so the voice model does not spell the Latin name.

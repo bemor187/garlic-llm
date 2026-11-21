@@ -1342,7 +1342,7 @@ static int ask_user(char* out, int max) {
     s.posy = SCREEN_H / 2;
     s.horizontalAlignment = ORBIS_H_CENTER;
     s.verticalAlignment = ORBIS_V_CENTER;
-    s.title = L"Garlic LLM";
+    s.title = L"DarkGarlic LLM";
     s.placeholder = placeholder;
     int r = sceImeDialogInit(&s, NULL);
     if (r < 0) {
