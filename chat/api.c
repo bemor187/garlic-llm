@@ -2,6 +2,10 @@
 // reads their requests; the chat requests go to the main loop one at a time (api_run.inc), which owns the model.
 // The sockets are the console's sceNet calls, declared here as the OpenOrbis headers do not have them all.
 // Nothing here runs until api_enable(1): no network library, no socket, no thread.
+//
+// A client may go away in the middle of a reply (a stopped generation, a closed tab). The next send to that
+// connection would then raise SIGPIPE, which ends the whole app by default. The signal is ignored (no_sigpipe) and
+// the sockets are marked SO_NOSIGPIPE, so the send fails instead and only that reply ends.
 #include "api.h"
 
 #include <stdint.h>
@@ -23,10 +27,14 @@
 // Socket constants that the SDK's headers do not name (the BSD values the console's libSceNet uses)
 #define API_SOL_SOCKET 0xffff
 #define API_SO_REUSEADDR 0x0004
+#define API_SO_NOSIGPIPE 0x0800
 #define API_SO_RCVTIMEO 0x1006
 #define API_SO_SNDTIMEO 0x1005
 #define API_IPPROTO_TCP 6
 #define API_IPPROTO_UDP 17
+#define API_SIGPIPE 13
+
+int _sigaction(int sig, const void* act, void* old);   // (libkernel: FreeBSD's sigaction; the headers leave it out)
 
 typedef struct {                // the BSD sockaddr_in: 16 bytes, the same size as OrbisNetSockaddr
     uint8_t len, family;
@@ -36,9 +44,11 @@ typedef struct {                // the BSD sockaddr_in: 16 bytes, the same size 
 } ApiSockaddrIn;
 _Static_assert(sizeof(ApiSockaddrIn) == sizeof(OrbisNetSockaddr), "sockaddr size");
 
+#define API_QUEUE 8               // chat requests that may wait for the model, the one being answered included
+
 static OrbisPthreadMutex api_mu;
-static ApiJob* queued;          // waiting for the main loop
-static int busy;                // a chat job is queued or running (api_done clears it)
+static ApiJob *queue_head, *queue_tail;   // waiting for the main loop, oldest first
+static int jobs;                // chat jobs queued or being answered (api_done counts one off)
 static char model_name[64] = "Garlic";
 static char* key;               // the API key, or NULL
 static OrbisPthread api_th;
@@ -64,6 +74,11 @@ int api_send(int fd, const char* p, size_t n) {
     return 0;
 }
 
+int api_client_gone(int fd) {
+    char c;   // (MSG_PEEK | MSG_DONTWAIT: 0 means the client closed the connection; nothing is taken from it)
+    return sceNetRecv(fd, &c, 1, 0x02 | 0x80) == 0;
+}
+
 static void reply(int fd, int status, const char* reason, const char* ctype, const char* body, size_t n) {
     char head[512];
     int h = snprintf(head, sizeof(head),
@@ -85,17 +100,23 @@ static void reply_json_error(int fd, int status, const char* reason, const char*
 ApiJob* api_take(void) {
     if (!ready) return NULL;   // (the API was never turned on)
     scePthreadMutexLock(&api_mu);
-    ApiJob* j = queued;
-    queued = NULL;
+    ApiJob* j = queue_head;
+    if (j) {
+        queue_head = j->next;
+        if (!queue_head) queue_tail = NULL;
+        j->next = NULL;
+    }
     scePthreadMutexUnlock(&api_mu);
     return j;
 }
 
 void api_done(ApiJob* job) {
+    sceNetSocketClose(job->fd);
+    free(job->body);
+    free(job);
     scePthreadMutexLock(&api_mu);
-    busy = 0;
+    jobs--;
     scePthreadMutexUnlock(&api_mu);
-    job->done = 1;
 }
 
 // the header value of Authorization must be "Bearer <key>"
@@ -133,14 +154,16 @@ static int read_request(int fd, char** buf_out, size_t* len_out, HttpRequest* re
     return r == 0 ? 0 : -1;
 }
 
-static void serve_chat(int fd, HttpRequest* req) {
+// Queues a chat request for the main loop. Returns 1 if the main loop now owns fd (api_done closes it), or 0 if the
+// request was answered here (malformed, out of memory, or another one is being answered) and fd is still ours.
+static int serve_chat(int fd, HttpRequest* req) {
     JNode* pool = malloc(sizeof(JNode) * API_MAX_NODES);
     ChatRequest cr;
     const char* err = NULL;
     if (!pool || api_chat_parse(req->body, req->body_len, pool, API_MAX_NODES, &cr, &err)) {
         free(pool);
         reply_json_error(fd, 400, "Bad Request", err ? err : "Out of memory.", "invalid_request_error", "invalid_body");
-        return;
+        return 0;
     }
     free(pool);
     ApiJob* job = calloc(1, sizeof(ApiJob));
@@ -149,7 +172,7 @@ static void serve_chat(int fd, HttpRequest* req) {
         free(job);
         free(body);
         reply_json_error(fd, 500, "Internal Server Error", "Out of memory.", "server_error", NULL);
-        return;
+        return 0;
     }
     memcpy(body, req->body, req->body_len);
     body[req->body_len] = 0;
@@ -157,39 +180,41 @@ static void serve_chat(int fd, HttpRequest* req) {
     job->body = body;
     job->body_len = req->body_len;
     scePthreadMutexLock(&api_mu);
-    int full = busy;
-    if (!full) {
-        busy = 1;
-        queued = job;
+    int ahead = jobs, full = jobs >= API_QUEUE;
+    if (!full) {   // (at the end of the line: the requests are answered in the order they came)
+        jobs++;
+        if (queue_tail) queue_tail->next = job;
+        else queue_head = job;
+        queue_tail = job;
     }
     scePthreadMutexUnlock(&api_mu);
     if (full) {
         free(body);
         free(job);
-        reply_json_error(fd, 503, "Service Unavailable", "The model is busy with another request.", "server_error",
-                         "busy");
-        return;
+        reply_json_error(fd, 503, "Service Unavailable", "Too many requests are waiting for the model.",
+                         "server_error", "busy");
+        return 0;
     }
-    say("api: chat request, %zu bytes, %s", req->body_len, cr.stream ? "streamed" : "whole reply");
-    // the main loop writes the reply to fd; the connection is closed here once it is written
-    while (!job->done) sceKernelUsleep(5000);
-    free(job->body);
-    free(job);
+    say("api: chat request, %zu bytes, %s, %d ahead of it", req->body_len, cr.stream ? "streamed" : "whole reply", ahead);
+    return 1;   // (the main loop writes the reply to fd and closes it)
 }
 
-static void handle(int fd) {
+// Answers one connection. Returns 1 if fd went to the main loop with a chat job, 0 if the caller closes it.
+static int handle(int fd) {
     struct {
         long sec, usec;
     } tmo = {20, 0};
     sceNetSetsockopt(fd, API_SOL_SOCKET, API_SO_RCVTIMEO, &tmo, sizeof(tmo));
     sceNetSetsockopt(fd, API_SOL_SOCKET, API_SO_SNDTIMEO, &tmo, sizeof(tmo));
+    int one = 1;   // (accepted sockets inherit it from the listening one; set again in case they do not)
+    sceNetSetsockopt(fd, API_SOL_SOCKET, API_SO_NOSIGPIPE, &one, sizeof(one));
     char* buf = NULL;
     size_t len = 0;
     HttpRequest req;
     int r = read_request(fd, &buf, &len, &req);
     if (r != 1) {   // malformed, too big, or cut off before the end
         reply_json_error(fd, 400, "Bad Request", "Malformed or incomplete request.", "invalid_request_error", NULL);
-        return;
+        return 0;
     }
     if (!strcmp(req.method, "OPTIONS")) {
         const char* h = "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\n"
@@ -214,13 +239,14 @@ static void handle(int fd) {
         else reply_json_error(fd, 404, "Not Found", "The API description is missing.", "invalid_request_error", NULL);
         free(spec);
     } else if (!strcmp(req.method, "POST") && !strcmp(req.path, "/v1/chat/completions")) {
-        serve_chat(fd, &req);
+        int queued_it = serve_chat(fd, &req);   // (the job has its own copy of the body)
         free(buf);
-        return;   // (serve_chat keeps the connection until the main loop has written the reply)
+        return queued_it;
     } else {
         reply_json_error(fd, 404, "Not Found", "No such endpoint.", "invalid_request_error", NULL);
     }
     free(buf);
+    return 0;
 }
 
 // The API is off: its port is closed, unless the server thread is waiting on the socket (then the thread closes it
@@ -249,14 +275,21 @@ static void* api_main(void* arg) {
         OrbisNetSocklen_t plen = sizeof(peer);
         int fd = sceNetAccept(l, (OrbisNetSockaddr*)&peer, &plen);
         accepting = 0;
-        if (fd >= 0) {
-            if (on) handle(fd);   // (a connection that came in after the API was turned off gets no answer)
-            sceNetSocketClose(fd);
-        }
+        // (a connection that came in after the API was turned off gets no answer; one with a chat job now belongs
+        // to the main loop, which closes it in api_done)
+        if (fd >= 0 && !(on && handle(fd))) sceNetSocketClose(fd);
         close_if_off();
         if (fd < 0) sceKernelUsleep(100000);   // (an error, or api_enable ended the wait to turn the API off)
     }
     return NULL;
+}
+
+// SIGPIPE ignored for the whole app (see the top of this file). FreeBSD's struct sigaction: the handler (SIG_IGN
+// is 1), no flags, an empty mask; the zeros after it cover a longer layout too.
+static void no_sigpipe(void) {
+    uint64_t act[20] = {1};
+    int r = _sigaction(API_SIGPIPE, act, NULL);
+    say("api: SIGPIPE %s (%d)", r ? "not ignored" : "ignored", r);
 }
 
 // The network library (as the SDK's net_http sample starts it), the mutex and the optional key: once, the first
@@ -273,6 +306,7 @@ static int api_setup(void) {
         say("api: sceNetInit 0x%08X; the API stays off", r);
         return -1;
     }
+    no_sigpipe();
     scePthreadMutexInit(&api_mu, NULL, "garlic_api");
     size_t n = 0;
     uint8_t* kd = read_all(API_KEY_FILE, &n);
@@ -300,6 +334,8 @@ static OrbisNetId api_listen(void) {
     }
     int one = 1;
     sceNetSetsockopt(s, API_SOL_SOCKET, API_SO_REUSEADDR, &one, sizeof(one));
+    int r = sceNetSetsockopt(s, API_SOL_SOCKET, API_SO_NOSIGPIPE, &one, sizeof(one));
+    if (r < 0) say("api: SO_NOSIGPIPE refused (0x%08X)", (unsigned)r);
     ApiSockaddrIn a;
     memset(&a, 0, sizeof(a));
     a.len = sizeof(a);

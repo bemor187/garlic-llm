@@ -111,7 +111,8 @@ curl http://192.168.1.5:8080/v1/chat/completions \
 - `GET /v1/models`, `POST /v1/chat/completions` (`stream: true` for server-sent events), `GET /health`.
 - The OpenAPI 3.1 description is at `GET /openapi.json` (also in [`chat/assets/openapi.json`](chat/assets/openapi.json)).
 - Replies are generated the way the chat generates its own, speculative decoding included.
-- One request runs at a time, and the chat screen is busy while it does: it says that a request is being answered, and ○ stops the reply (the client gets what was written so far, with `finish_reason: "length"`). Requests wait while the keyboard, voice mode or a Python program is open.
+- One request runs at a time, and the chat screen is busy while it does: it says that a request is being answered, and ○ stops the reply (the client gets what was written so far, with `finish_reason: "length"`). Requests wait while the keyboard, voice mode or a Python program is open. Chat requests sent meanwhile wait their turn, up to 8 in all (more get `503` with the code `busy`); `/v1/models` and `/health` answer at once.
+- A client may stop a reply at any time, for example with a stop button: the console ends that reply and keeps running.
 - A request is a conversation of its own, so the one on the console's screen is cleared.
 - Reasoning is off. Only `n = 1` is supported; `tools`, `logprobs` and similar parameters are ignored.
 - For an API key, put it in `/data/garlic_api_key.txt` on the console. Requests then need `Authorization: Bearer <key>`. Without that file, anyone on your network can use the API while it is on, and clients that insist on a key accept any text.
