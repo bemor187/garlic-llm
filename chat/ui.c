@@ -2236,7 +2236,8 @@ void draw_error(const char* what) {
 #define KB_ROWS 6
 #define KB_COLS 12
 // Special keys: ⇧ shift, ⌫ delete, ␣ space, ⏎ send, [emoji], [lang] (next layout); dead keys (accents) are
-// listed per layout in kb_dead. A key repeated in neighbouring columns is one wide key.
+// listed per layout in kb_dead; the kana keys ゛ ゜ 小 change the kana before them. A key repeated in neighbouring
+// columns is one wide key.
 static const char* kb_layouts[N_KB_LAYOUTS][KB_ROWS][KB_COLS] = {
     [KB_ES] = {{"1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "¿", "?"},
                {"q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "´", "⌫"},
@@ -2262,19 +2263,58 @@ static const char* kb_layouts[N_KB_LAYOUTS][KB_ROWS][KB_COLS] = {
                {"⇧", "я", "ч", "с", "м", "и", "т", "ь", "б", "ю", "ё", ","},
                {".", ":", ";", "-", "_", "+", "=", "*", "/", "(", ")", "\""},
                {"[lang]", "@", "#", "%", "'", "␣", "␣", "␣", "[emoji]", "[emoji]", "⏎", "⏎"}},
+    [KB_FR] = {{"1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "?", "!"},   // AZERTY
+               {"a", "z", "e", "r", "t", "y", "u", "i", "o", "p", "^", "⌫"},
+               {"q", "s", "d", "f", "g", "h", "j", "k", "l", "m", "ù", "¨"},
+               {"⇧", "w", "x", "c", "v", "b", "n", "é", "è", "à", "ç", "œ"},
+               {",", ".", ";", ":", "-", "_", "+", "=", "*", "/", "(", ")"},
+               {"[lang]", "'", "\"", "@", "€", "␣", "␣", "␣", "[emoji]", "[emoji]", "⏎", "⏎"}},
+    [KB_DE] = {{"1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "ß", "?"},   // QWERTZ
+               {"q", "w", "e", "r", "t", "z", "u", "i", "o", "p", "ü", "⌫"},
+               {"a", "s", "d", "f", "g", "h", "j", "k", "l", "ö", "ä", "!"},
+               {"⇧", "y", "x", "c", "v", "b", "n", "m", ",", ".", "-", ":"},
+               {";", "_", "+", "=", "*", "/", "%", "&", "(", ")", "\"", "'"},
+               {"[lang]", "@", "#", "€", "~", "␣", "␣", "␣", "[emoji]", "[emoji]", "⏎", "⏎"}},
+    // Arabic (the PC layout's letter rows), with the hamza forms of alef and the Persian letters on the fifth row
+    [KB_AR] = {{"1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "؟", "!"},
+               {"ض", "ص", "ث", "ق", "ف", "غ", "ع", "ه", "خ", "ح", "ج", "⌫"},
+               {"ش", "س", "ي", "ب", "ل", "ا", "ت", "ن", "م", "ك", "ط", "د"},
+               {"ئ", "ء", "ؤ", "ر", "لا", "ى", "ة", "و", "ز", "ظ", "ذ", "،"},
+               {"أ", "إ", "آ", "پ", "چ", "ژ", "گ", "ک", "ی", ".", ":", "-"},
+               {"[lang]", "(", ")", "@", "%", "␣", "␣", "␣", "[emoji]", "[emoji]", "⏎", "⏎"}},
+    // kana in the order of the syllabary: one column per consonant, one row per vowel
+    [KB_JA] = {{"あ", "か", "さ", "た", "な", "は", "ま", "や", "ら", "わ", "゛", "⌫"},
+               {"い", "き", "し", "ち", "に", "ひ", "み", "「", "り", "を", "゜", "小"},
+               {"う", "く", "す", "つ", "ぬ", "ふ", "む", "ゆ", "る", "ん", "ー", "、"},
+               {"え", "け", "せ", "て", "ね", "へ", "め", "」", "れ", "？", "！", "。"},
+               {"お", "こ", "そ", "と", "の", "ほ", "も", "よ", "ろ", "⇧", "・", "〜"},
+               {"[lang]", "（", "）", "：", "…", "␣", "␣", "␣", "[emoji]", "[emoji]", "⏎", "⏎"}},
+    // two-set hangul (Shift: the double consonants and ㅒ ㅖ)
+    [KB_KO] = {{"1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "?", "!"},
+               {"ㅂ", "ㅈ", "ㄷ", "ㄱ", "ㅅ", "ㅛ", "ㅕ", "ㅑ", "ㅐ", "ㅔ", ".", "⌫"},
+               {"ㅁ", "ㄴ", "ㅇ", "ㄹ", "ㅎ", "ㅗ", "ㅓ", "ㅏ", "ㅣ", ",", ";", ":"},
+               {"⇧", "ㅋ", "ㅌ", "ㅊ", "ㅍ", "ㅠ", "ㅜ", "ㅡ", "-", "'", "\"", "~"},
+               {"_", "+", "=", "*", "/", "%", "&", "<", ">", "(", ")", "@"},
+               {"[lang]", "#", "$", "^", "…", "␣", "␣", "␣", "[emoji]", "[emoji]", "⏎", "⏎"}},
 };
-static const char* kb_names[N_KB_LAYOUTS] = {"ES", "EN", "PT", "RU"};
-static const char* kb_dead[N_KB_LAYOUTS][4] = {[KB_ES] = {"´"}, [KB_PT] = {"´", "~", "^", "`"}};
-
-int kb_layout_for(int lang) {   // (Chinese, Japanese, Korean, French, German and Arabic: English for now)
-    static const int map[N_LANGS] = {KB_ES, KB_EN, KB_PT, KB_RU, KB_EN, KB_EN, KB_EN, KB_EN, KB_EN, KB_EN, KB_EN};
-    return lang >= 0 && lang < N_LANGS ? map[lang] : KB_EN;
-}
+static const char* kb_names[N_KB_LAYOUTS] = {"ES", "EN", "PT", "RU", "FR", "DE", "AR", "JA", "KO"};
+static const char* kb_abc[N_KB_LAYOUTS] = {"ABC", "ABC", "ABC", "АБВ", "ABC", "ABC", "أبج", "あいう", "가나다"};
+static const char* kb_dead[N_KB_LAYOUTS][4] = {[KB_ES] = {"´"}, [KB_PT] = {"´", "~", "^", "`"}, [KB_FR] = {"^", "¨"}};
 
 static int is_dead(int layout, const char* key) {
     for (int i = 0; i < 4 && kb_dead[layout][i]; i++)
         if (!strcmp(kb_dead[layout][i], key)) return 1;
     return 0;
+}
+
+static int kana_key(int layout, const char* key) {   // ゛ ゜ 小: 1, 2, 3
+    if (layout != KB_JA) return 0;
+    return !strcmp(key, "゛") ? 1 : !strcmp(key, "゜") ? 2 : !strcmp(key, "小") ? 3 : 0;
+}
+
+int kb_layout_for(int lang) {
+    static const int map[N_LANGS] = {KB_ES, KB_EN, KB_PT, KB_RU, KB_FR, KB_DE, KB_AR, KB_JA, KB_EN, KB_EN, KB_KO};
+    return lang >= 0 && lang < N_LANGS ? map[lang] : KB_EN;
 }
 
 #include "emoji_pages.h"
@@ -2296,7 +2336,19 @@ static int kb_span(const Kb* kb, int row, int col) {
 
 void kb_init(Kb* kb, int layout) {
     memset(kb, 0, sizeof(*kb));
-    kb->layout = layout, kb->row = 1, kb->last_emoji_page = 1;
+    kb->layout = kb->home = layout, kb->row = 1, kb->last_emoji_page = 1;
+}
+
+// The language key: the layout it opened with, English, then the others.
+static int kb_next_layout(const Kb* kb) {
+    int order[N_KB_LAYOUTS], n = 0;
+    order[n++] = kb->home;
+    if (kb->home != KB_EN) order[n++] = KB_EN;
+    for (int l = 0; l < N_KB_LAYOUTS; l++)
+        if (l != kb->home && l != KB_EN) order[n++] = l;
+    for (int i = 0; i < n; i++)
+        if (order[i] == kb->layout) return order[(i + 1) % n];
+    return kb->home;
 }
 
 void kb_move(Kb* kb, int dx, int dy) {
@@ -2330,8 +2382,15 @@ void kb_backspace(char* out) {
 static uint32_t upper_cp(uint32_t c) {
     if (c >= 'a' && c <= 'z') return c - 32;
     if (c >= 0xE0 && c <= 0xFE && c != 0xF7) return c - 32;
+    if (c == 0xFF) return 0x178;
+    if (c == 0x153) return 0x152;
     if (c >= 0x430 && c <= 0x44F) return c - 32;
     if (c >= 0x450 && c <= 0x45F) return c - 80;
+    if (c >= 0x3041 && c <= 0x3096) return c + 0x60;   // hiragana -> katakana
+    static const uint16_t ko[][2] = {{0x3142, 0x3143}, {0x3148, 0x3149}, {0x3137, 0x3138}, {0x3131, 0x3132},
+                                     {0x3145, 0x3146}, {0x3150, 0x3152}, {0x3154, 0x3156}};   // ㅂ->ㅃ ... ㅔ->ㅖ
+    for (size_t i = 0; i < sizeof(ko) / sizeof(ko[0]); i++)
+        if (ko[i][0] == c) return ko[i][1];
     return c;
 }
 
@@ -2339,7 +2398,9 @@ static uint32_t upper_cp(uint32_t c) {
 static void kb_compose(const char* key, int shift, const char* dead, char* out, int max) {
     static const char* table[][3] = {{"´", "a", "á"}, {"´", "e", "é"}, {"´", "i", "í"}, {"´", "o", "ó"}, {"´", "u", "ú"},
                                      {"~", "a", "ã"}, {"~", "o", "õ"}, {"~", "n", "ñ"}, {"^", "a", "â"}, {"^", "e", "ê"},
-                                     {"^", "o", "ô"}, {"`", "a", "à"}};
+                                     {"^", "o", "ô"}, {"^", "i", "î"}, {"^", "u", "û"}, {"`", "a", "à"}, {"`", "e", "è"},
+                                     {"`", "u", "ù"}, {"¨", "a", "ä"}, {"¨", "e", "ë"}, {"¨", "i", "ï"}, {"¨", "o", "ö"},
+                                     {"¨", "u", "ü"}, {"¨", "y", "ÿ"}};
     const char* base = key;
     if (dead)
         for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++)
@@ -2352,25 +2413,136 @@ static void kb_compose(const char* key, int shift, const char* dead, char* out, 
     out[n] = 0;
 }
 
+// The last character of out: its codepoint and where it starts (0 if out is empty).
+static uint32_t last_cp(const char* out, size_t* at) {
+    size_t i = strlen(out);
+    if (!i) return *at = 0, 0;
+    while (i > 0 && ((uint8_t)out[--i] & 0xC0) == 0x80) {}
+    const char* p = out + i;
+    *at = i;
+    return utf8_next(&p);
+}
+
+// Puts cps[0..n) in place of out's text from byte at, if it fits.
+static void replace_tail(char* out, int max, size_t at, const uint32_t* cps, int n) {
+    char s[16];
+    int k = 0;
+    for (int i = 0; i < n; i++) k += utf8_put(cps[i], s + k);
+    if (at + k < (size_t)max) memcpy(out + at, s, k), out[at + k] = 0;
+}
+
+// ゛ ゜ 小 (kind 1, 2, 3) on the kana before them: か -> が, は -> ぱ, つ -> っ, and back. 0 = does not apply.
+static uint32_t kana_change(uint32_t c, int kind) {
+    int kata = c >= 0x30A1 && c <= 0x30F6;
+    uint32_t h = kata ? c - 0x60 : c, r = 0;
+    if (kind == 1) {
+        if (h >= 0x304B && h <= 0x3062) r = (h - 0x304B) % 2 ? h - 1 : h + 1;   // か..ぢ
+        else if (h >= 0x3064 && h <= 0x3069) r = (h - 0x3064) % 2 ? h - 1 : h + 1;   // つ..ど
+        else if (h >= 0x306F && h <= 0x307D) r = (h - 0x306F) % 3 == 1 ? h - 1 : h - (h - 0x306F) % 3 + 1;   // は..ぽ
+        else if (h == 0x3046) r = 0x3094;
+        else if (h == 0x3094) r = 0x3046;
+    } else if (kind == 2) {
+        if (h >= 0x306F && h <= 0x307D) r = (h - 0x306F) % 3 == 2 ? h - 2 : h - (h - 0x306F) % 3 + 2;
+    } else {
+        static const uint16_t big[] = {0x3042, 0x3044, 0x3046, 0x3048, 0x304A, 0x3064, 0x3084, 0x3086, 0x3088, 0x308F};
+        for (size_t i = 0; i < sizeof(big) / sizeof(big[0]) && !r; i++)
+            r = h == big[i] ? h - 1u : h == big[i] - 1u ? h + 1u : 0;
+    }
+    return r ? (kata ? r + 0x60 : r) : 0;
+}
+
+// Two-set hangul: a jamo joins the syllable before it. Consonants are compatibility jamo U+3131-314E, vowels
+// U+314F-3163 (in the order of the syllables' vowels); a syllable is 0xAC00 + (initial * 21 + vowel) * 28 + final.
+static const int8_t ko_initial[30] = {0, 1, -1, 2, -1, -1, 3, 4, 5, -1, -1, -1, -1, -1, -1,
+                                      -1, 6, 7, 8, -1, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18};
+static const int8_t ko_final[30] = {1, 2, 3, 4, 5, 6, 7, 0, 8, 9, 10, 11, 12, 13, 14,
+                                    15, 16, 17, 0, 18, 19, 20, 21, 22, 0, 23, 24, 25, 26, 27};
+static const uint16_t ko_final_jamo[28] = {0, 0x3131, 0x3132, 0x3133, 0x3134, 0x3135, 0x3136, 0x3137, 0x3139, 0x313A,
+                                           0x313B, 0x313C, 0x313D, 0x313E, 0x313F, 0x3140, 0x3141, 0x3142, 0x3144,
+                                           0x3145, 0x3146, 0x3147, 0x3148, 0x314A, 0x314B, 0x314C, 0x314D, 0x314E};
+static const uint16_t ko_double_final[][3] = {{1, 0x3145, 3},   {4, 0x3148, 5},   {4, 0x314E, 6},  {8, 0x3131, 9},
+                                              {8, 0x3141, 10},  {8, 0x3142, 11},  {8, 0x3145, 12}, {8, 0x314C, 13},
+                                              {8, 0x314D, 14},  {8, 0x314E, 15},  {17, 0x3145, 18}};   // ㄳ ㄵ ㄶ ㄺ ...
+static const uint8_t ko_double_vowel[][3] = {{8, 0, 9}, {8, 1, 10}, {8, 20, 11}, {13, 4, 14}, {13, 5, 15}, {13, 20, 16},
+                                             {18, 20, 19}};   // ㅘ ㅙ ㅚ ㅝ ㅞ ㅟ ㅢ
+
+static uint32_t ko_syllable(int initial, int vowel, int final) { return 0xAC00 + (initial * 21 + vowel) * 28 + final; }
+
+static void hangul_type(char* out, int max, uint32_t j) {
+    size_t at;
+    uint32_t last = last_cp(out, &at);
+    int syl = last >= 0xAC00 && last <= 0xD7A3, s = syl ? (int)(last - 0xAC00) : 0;
+    int ini = s / 588, vow = s / 28 % 21, fin = s % 28;
+    char one[8];
+    if (j <= 0x314E) {   // a consonant: the final of the syllable before, or a double final
+        uint32_t c[1];
+        if (syl && !fin && ko_final[j - 0x3131]) {
+            c[0] = ko_syllable(ini, vow, ko_final[j - 0x3131]);
+            replace_tail(out, max, at, c, 1);
+            return;
+        }
+        for (size_t k = 0; syl && fin && k < sizeof(ko_double_final) / sizeof(ko_double_final[0]); k++)
+            if (ko_double_final[k][0] == fin && ko_double_final[k][1] == j) {
+                c[0] = ko_syllable(ini, vow, ko_double_final[k][2]);
+                replace_tail(out, max, at, c, 1);
+                return;
+            }
+    } else {   // a vowel
+        int v = (int)(j - 0x314F);
+        if (last >= 0x3131 && last <= 0x314E && ko_initial[last - 0x3131] >= 0) {   // after a lone consonant
+            uint32_t c[1] = {ko_syllable(ko_initial[last - 0x3131], v, 0)};
+            replace_tail(out, max, at, c, 1);
+            return;
+        }
+        if (syl && fin) {   // the final consonant starts the new syllable (or the second half of a double one)
+            int keep = 0;
+            uint32_t moved = ko_final_jamo[fin];
+            for (size_t k = 0; k < sizeof(ko_double_final) / sizeof(ko_double_final[0]); k++)
+                if (ko_double_final[k][2] == fin) keep = ko_double_final[k][0], moved = ko_double_final[k][1];
+            uint32_t c[2] = {ko_syllable(ini, vow, keep), ko_syllable(ko_initial[moved - 0x3131], v, 0)};
+            replace_tail(out, max, at, c, 2);
+            return;
+        }
+        for (size_t k = 0; syl && k < sizeof(ko_double_vowel) / sizeof(ko_double_vowel[0]); k++)
+            if (ko_double_vowel[k][0] == vow && ko_double_vowel[k][1] == v) {
+                uint32_t c[1] = {ko_syllable(ini, ko_double_vowel[k][2], 0)};
+                replace_tail(out, max, at, c, 1);
+                return;
+            }
+    }
+    one[utf8_put(j, one)] = 0;
+    kb_append(out, max, one);
+}
+
 int kb_press(Kb* kb, char* out, int max) {
     const char* key = kb_key(kb, kb->row, kb->col);
+    int kana = kb->page == 0 ? kana_key(kb->layout, key) : 0;
     if (!strcmp(key, "⏎")) return 1;
     if (!strcmp(key, "⌫")) kb_backspace(out);
     else if (!strcmp(key, "⇧")) kb->shift = !kb->shift;
     else if (!strcmp(key, "␣")) kb_append(out, max, " "), kb->dead = NULL;
     else if (!strcmp(key, "[emoji]")) kb->page = kb->last_emoji_page;
     else if (!strcmp(key, "[abc]")) kb->page = 0;
-    else if (!strcmp(key, "[lang]")) kb->layout = (kb->layout + 1) % N_KB_LAYOUTS, kb->shift = 0, kb->dead = NULL;
+    else if (!strcmp(key, "[lang]")) kb->layout = kb_next_layout(kb), kb->shift = 0, kb->dead = NULL;
     else if (!strncmp(key, "[t", 2)) kb->page = kb->last_emoji_page = 1 + (key[2] - '0');
-    else if (kb->page == 0 && is_dead(kb->layout, key)) {
+    else if (kana) {   // ゛ ゜ 小 change the kana before them (on anything else ゛ and ゜ are typed as they are)
+        size_t at;
+        uint32_t c = kana_change(last_cp(out, &at), kana);
+        if (c) replace_tail(out, max, at, &c, 1);
+        else if (kana < 3) kb_append(out, max, key);
+    } else if (kb->page == 0 && is_dead(kb->layout, key)) {
         if (kb->dead && !strcmp(kb->dead, key)) kb_append(out, max, key), kb->dead = NULL;   // twice: the accent itself
         else kb->dead = key;
     } else {
         char s[32];
         kb_compose(key, kb->shift, kb->dead, s, sizeof(s));
+        const char* q = s;
+        uint32_t c = utf8_next(&q);
         if (kb->dead && !strcmp(s, key)) kb_append(out, max, kb->dead);   // accent that does not combine: keep it
-        kb_append(out, max, s);
-        kb->dead = NULL, kb->shift = 0;   // shift applies to one letter, like a phone keyboard
+        if (kb->layout == KB_KO && kb->page == 0 && !*q && c >= 0x3131 && c <= 0x3163) hangul_type(out, max, c);
+        else kb_append(out, max, s);
+        kb->dead = NULL;
+        if (kb->layout != KB_JA) kb->shift = 0;   // shift applies to one letter, like a phone keyboard (katakana stay)
     }
     if (kb->page) kb->last_emoji_page = kb->page;
     return 0;
@@ -2417,11 +2589,12 @@ static void key_label(const Kb* kb, const char* key, char* out, int max, const F
     if (!strcmp(key, "␣")) snprintf(out, max, "%s", tr(S_SPACE_KEY)), *f = &font_small;
     else if (!strcmp(key, "⏎")) snprintf(out, max, "%s", tr(S_SEND_KEY)), *f = &font_bold;
     else if (!strcmp(key, "[emoji]")) snprintf(out, max, "😀");
-    else if (!strcmp(key, "[abc]")) snprintf(out, max, "%s", kb_layouts[kb->layout][1][0][0] & 0x80 ? "АБВ" : "ABC"), *f = &font_bold;
+    else if (!strcmp(key, "[abc]")) snprintf(out, max, "%s", kb_abc[kb->layout]), *f = &font_bold;
     else if (!strcmp(key, "[lang]")) snprintf(out, max, "🌐 %s", kb_names[kb->layout]), *f = &font_small;
     else if (!strncmp(key, "[t", 2)) snprintf(out, max, "%s", emoji_tab[key[2] - '0']), *f = &font_big;
     else if (kb->page > 0) snprintf(out, max, "%s", key), *f = &font_big;   // emoji at ~25 px
     else if (is_dead(kb->layout, key)) snprintf(out, max, "%s", key), *f = &font_big;   // accents are tiny: bigger
+    else if (kana_key(kb->layout, key)) snprintf(out, max, "%s", (const char*[]){"", "濁点", "半濁点", "小"}[kana_key(kb->layout, key)]);
     else if (!strcmp(key, "⇧") || !strcmp(key, "⌫")) snprintf(out, max, "%s", key);
     else kb_compose(key, kb->shift, kb->dead, out, max);
 }
@@ -2432,7 +2605,7 @@ static void kb_draw_key(const Kb* kb, int r, int k, int x0, int y0, int sel) {
     int span = kb_span(kb, r, k);
     int x = x0 + k * (KEY_W + KEY_GAP), ky = y0 + r * (KEY_H + KEY_GAP), w = span * (KEY_W + KEY_GAP) - KEY_GAP;
     int special = key[0] == '[' || !strcmp(key, "⇧") || !strcmp(key, "⌫") || !strcmp(key, "␣") ||
-                  (kb->page == 0 && is_dead(kb->layout, key));
+                  (kb->page == 0 && (is_dead(kb->layout, key) || kana_key(kb->layout, key)));
     int enter = !strcmp(key, "⏎");
     int on = (!strcmp(key, "⇧") && kb->shift) || (kb->dead && !strcmp(key, kb->dead)) ||
              (kb->page > 0 && !strncmp(key, "[t", 2) && key[2] - '0' == kb->page - 1);
@@ -2460,7 +2633,7 @@ static void kb_draw_key(const Kb* kb, int r, int k, int x0, int y0, int sel) {
 void draw_keyboard(const Kb* kb, const char* text, double time) {
     int px = (SCREEN_W - KEYS_W) / 2 - PANEL_PAD;
     int x0 = px + PANEL_PAD, y = PANEL_Y + PANEL_PAD, y0 = y + FIELD_H + 24;
-    int sig = kb->layout | kb->page << 3 | kb->shift << 7 | ui_lang << 8 |
+    int sig = kb->layout | kb->page << 4 | kb->shift << 7 | ui_lang << 8 |
               (kb->dead ? 1 + (int)((uintptr_t)kb->dead % 4093) : 0) << 12;
     if (!kb_cache) kb_cache = ui_screen_buf();
     if (sig != kb_cache_sig || !kb_cache) {
@@ -2471,13 +2644,15 @@ void draw_keyboard(const Kb* kb, const char* text, double time) {
         for (int r = 0; r < KB_ROWS; r++)
             for (int k = 0; k < KB_COLS; k++)
                 if (k == 0 || strcmp(kb_key(kb, r, k), kb_key(kb, r, k - 1))) kb_draw_key(kb, r, k, x0, y0, 0);
+        // (in Chinese, Japanese and Korean, OPTIONS: the system keyboard, with its input methods)
         const Hint h_letters[] = {{BTN_CROSS, S_KB_TYPE}, {BTN_SQUARE, S_KB_DELETE}, {BTN_TRIANGLE, S_KB_SPACE},
                                   {BTN_L1, S_KB_SHIFT},   {BTN_R1, S_KB_EMOJI},      {BTN_L2, S_KB_DICTATE},
-                                  {BTN_R2, S_KB_SEND},    {BTN_CIRCLE, S_KB_CLOSE}};
+                                  {BTN_R2, S_KB_SEND},    {BTN_CIRCLE, S_KB_CLOSE},  {BTN_OPTIONS, S_KB_SYSTEM}};
+        int cjk = ui_lang == LANG_JA || ui_lang == LANG_ZH_HANS || ui_lang == LANG_ZH_HANT || ui_lang == LANG_KO;
         const Hint h_emoji[] = {{BTN_CROSS, S_KB_TYPE}, {BTN_SQUARE, S_KB_DELETE}, {BTN_TRIANGLE, S_KB_SPACE},
                                 {BTN_R1, S_KB_LETTERS}, {BTN_R2, S_KB_SEND},      {BTN_CIRCLE, S_KB_CLOSE}};
         if (kb->page) draw_footer(h_emoji, 6, emoji_titles[ui_lang][kb->page - 1]);
-        else draw_footer(h_letters, 8, NULL);
+        else draw_footer(h_letters, cjk ? 9 : 8, NULL);
         if (kb_cache) {
             memcpy(kb_cache, back, SCREEN_W * SCREEN_H * 4);
             kb_cache_sig = sig;

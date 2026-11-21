@@ -104,14 +104,17 @@ typedef struct {
 void draw_footer(const Hint* hints, int n, const char* right);
 
 // ---- the on-screen keyboard (drawn by the app, driven by the controller) ----
-enum { KB_ES, KB_EN, KB_PT, KB_RU, N_KB_LAYOUTS };
+// KB_JA: kana (Shift: katakana until pressed again); KB_KO: two-set hangul, jamo joined into syllables. Chinese
+// has no layout here: the system keyboard (OPTIONS) has its input methods.
+enum { KB_ES, KB_EN, KB_PT, KB_RU, KB_FR, KB_DE, KB_AR, KB_JA, KB_KO, N_KB_LAYOUTS };
 int kb_layout_for(int lang);   // the layout the keyboard opens with in a language (LANG_*)
 typedef struct {
     int layout;              // KB_*
+    int home;                // the layout it opened with: the language key goes home -> English -> the others
     int page;                // 0 = letters, 1.. = emoji category
     int row, col;
     int shift;               // one letter in capitals
-    const char* dead;        // pending accent ("´", "~", "^", "`") or NULL
+    const char* dead;        // pending accent ("´", "~", "^", "`", "¨") or NULL
     int last_emoji_page;
 } Kb;
 void kb_init(Kb* kb, int layout);
