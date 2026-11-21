@@ -1,9 +1,9 @@
 // See ja_kana.h. The steps follow pykakasi 2.3.0 (Kakasi.convert, JConv.convert) as Chatterbox uses it
 // (hiragana_normalize in its tokenizer.py): characters of the kana, Latin, Greek, Cyrillic and symbol ranges are
 // left as they are; at a kanji (U+3400..U+DFFF) the longest dictionary word wins; codepoints U+F000..U+FFFD and
-// above U+FFFF are dropped. Two differences, both on text that a reply hardly has: a kanji the dictionary does
-// not know is dropped alone (pykakasi also drops the character after it), and variation selectors are dropped
-// before the lookup.
+// above U+FFFF are dropped. Besides the composed text and the fixed readings (ja_kana.h), two differences, both on
+// text that a reply hardly has: a kanji the dictionary does not know is dropped alone (pykakasi also drops the
+// character after it), and variation selectors are dropped before the lookup.
 #include "ja_kana.h"
 
 #include <stdlib.h>
@@ -144,7 +144,8 @@ int jakana_convert(const JaKana* j, const uint32_t* in, int n, uint32_t* out, in
     uint32_t yomi[96];
     for (int i = 0; i < n && o < max;) {
         uint32_t c = in[i];
-        if ((c >= 0xFE00 && c <= 0xFE0F) || (c >= 0xE0100 && c <= 0xE01EF)) {   // variation selectors
+        // variation selectors, and the zero-width space that keeps a word apart (st_speak: 約 + a number's reading)
+        if ((c >= 0xFE00 && c <= 0xFE0F) || (c >= 0xE0100 && c <= 0xE01EF) || c == 0x200B) {
             i++;
             continue;
         }
@@ -160,7 +161,9 @@ int jakana_convert(const JaKana* j, const uint32_t* in, int n, uint32_t* out, in
             if (!kanji) {
                 for (int q = i; q < i + len && o < max; q++) out[o++] = in[q];
             } else {
-                if ((yomi[0] == 0x306F || yomi[0] == 0x3078) && o < max) out[o++] = ' ';   // は, へ
+                // は, へ (not after the prefixes ご, お: ご飯 is ごはん)
+                if ((yomi[0] == 0x306F || yomi[0] == 0x3078) && o < max && !(o && (out[o - 1] == 0x3054 || out[o - 1] == 0x304A)))
+                    out[o++] = ' ';
                 for (int q = 0; q < ny && o < max; q++) out[o++] = yomi[q];
             }
             i += len;

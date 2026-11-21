@@ -634,7 +634,9 @@ static const JaCounter ja_ctr[] = {   // longer first where one starts another (
     {"軒", "けん", J_K | J_G3}, {"冊", "さつ", J_S}, {"歳", "さい", J_S}, {"才", "さい", J_S}, {"点", "てん", J_S},
     {"本", "ほん", J_H | J_B3}, {"匹", "ひき", J_H | J_B3}, {"杯", "はい", J_H | J_B3}, {"泊", "はく", J_H},
     {"台", "だい", 0}, {"枚", "まい", 0}, {"度", "ど", 0}, {"倍", "ばい", 0}, {"番", "ばん", 0}, {"位", "い", 0},
-    {"つ", "つ", 0}, {0, 0, 0}};
+    {"次", "じ", 0}, {"代", "だい", 0}, {"世紀", "せいき", J_S}, {"号", "ごう", 0}, {"章", "しょう", J_S},
+    {"巻", "かん", J_K}, {"話", "わ", 0}, {"部", "ぶ", 0}, {"名", "めい", 0}, {"割", "わり", 0}, {"社", "しゃ", J_S},
+    {"種類", "しゅるい", J_S}, {"つ", "つ", 0}, {0, 0, 0}};
 // the counter (if any) at s[i]: its index in ja_ctr and its length in bytes
 static int ja_counter_at(const char* s, int n, int i, int* len) {
     for (int k = 0; ja_ctr[k].w; k++) {
@@ -670,6 +672,7 @@ static void ja_count(Buf* b, int from, uint64_t v, int k, int after_month) {
     }
     if ((!strcmp(c->w, "歳") || !strcmp(c->w, "才")) && v == 20) whole = "はたち";
     if (!strcmp(c->w, "月") && !(v >= 1 && v <= 12)) return put(b, "がつ");
+    if (!strcmp(c->w, "度") && !v) whole = "れいど";   // 0度
     if (whole) {
         b->n = from, b->p[from] = 0;
         return put(b, whole);
@@ -1195,8 +1198,12 @@ static int ja_number(St* st, int i) {
         if (mm) f = b->n, ja_card(b, (uint64_t)mm), ja_count(b, f, (uint64_t)mm, ja_ctr_index("分"), 0);
         return ja_range(st, e + 3);
     }
-    // one digit after capital letters, in English as Japanese says it: PS4 -> ピーエスフォー, MP3 -> エムピースリー
-    if (nd == 1 && a > 0 && s[a - 1] >= 'A' && s[a - 1] <= 'Z' && !has_dec) {
+    // one digit right after capital letters or a katakana word, in English as Japanese says it: PS4 -> ピーエスフォー,
+    // MP3 -> エムピースリー, バイオハザード2 -> バイオハザードツー (not before a counter: ゲーム2本)
+    int cl0, after_kata = a >= 3 && (uint8_t)s[a - 3] == 0xE3 && ((uint8_t)s[a - 2] == 0x83 ||
+                                                               ((uint8_t)s[a - 2] == 0x82 && (uint8_t)s[a - 1] >= 0xA1));
+    if (nd == 1 && a > 0 && ((s[a - 1] >= 'A' && s[a - 1] <= 'Z') || after_kata) && !has_dec &&
+        ja_counter_at(s, n, e, &cl0) < 0 && !(e < n && (s[e] == '%' || s[e] == ':' || s[e] == '-'))) {
         static const char* en[10] = {"ゼロ", "ワン", "ツー", "スリー", "フォー", "ファイブ", "シックス", "セブン", "エイト", "ナイン"};
         return put(b, en[v]), e;
     }
@@ -1794,7 +1801,76 @@ static int is_ja_char(uint32_t c) {
            (c >= 0x3400 && c <= 0x4DBF) || (c >= 0x4E00 && c <= 0x9FFF) || (c >= 0xF900 && c <= 0xFAFF) ||
            (c >= 0xFF61 && c <= 0xFF9F);
 }
-static int script_pass(char* s, int n, int L) {
+// Japanese numbers written in kanji as digits, for ja_number: 二十五 -> 25, 一億二千万 -> 120000000, 一九四五 -> 1945.
+// A run of two or more numerals unless a kanji follows it (八百屋, 七五三祝い are words); one numeral only before a
+// counter (一人, 三日, 二次). Not 十分 before な, に, で... (enough), nor a run that starts with 万, 億 or 兆 (万一).
+static int ja_numeral(const char* s, int n, int i, int* len) {   // the value 0-9 of a numeral, or 10, 100, ...
+    static const char* d[] = {"〇", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "百", "千", "万", "億", "兆", "零"};
+    static const int v[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 100, 1000, 10000, 100000000, -1, 0};
+    for (int k = 0; k < 17; k++)
+        if (n - i >= 3 && !memcmp(s + i, d[k], 3)) return *len = 3, k == 15 ? -2 : v[k];
+    return *len = 0, -3;
+}
+static int ja_kanji_numbers(char* s, int n, int max) {
+    static char out[4096];   // (the digits can be longer than the kanji: 九十億 -> 9000000000)
+    int o = 0;
+    if (max > (int)sizeof(out)) max = (int)sizeof(out);
+    for (int i = 0; i < n && o < max - 24;) {
+        int l, v = ja_numeral(s, n, i, &l), e = i, count = 0, units = 0;
+        if (v < -2 || v >= 10000 || v == -2) {   // (not a numeral, or 万 億 兆 first)
+            int cl;
+            cp(s + i, &cl);
+            memcpy(out + o, s + i, cl);
+            o += cl, i += cl;
+            continue;
+        }
+        for (int x; e < n && (x = ja_numeral(s, n, e, &l)) > -3; e += 3, count++) units += x >= 10 || x == -2;
+        int cl, next_counter = 0, next_kanji = 0;
+        for (int k = 0; ja_ctr[k].w; k++) {   // (ja_counter_at, also for パーセント)
+            int ll = (int)strlen(ja_ctr[k].w);
+            if (n - e >= ll && !memcmp(s + e, ja_ctr[k].w, ll)) next_counter = 1;
+        }
+        if (n - e >= 15 && !memcmp(s + e, "パーセント", 15)) next_counter = 1;
+        uint32_t c = e < n ? cp(s + e, &cl) : 0;
+        next_kanji = (c >= 0x4E00 && c <= 0x9FFF) || (c >= 0x3400 && c <= 0x4DBF);
+        int enough = 0;   // 十分な, 十分に, 十分です: "enough", not ten minutes
+        if (count == 1 && n - i >= 6 && !memcmp(s + i, "十分", 6)) {
+            static const char* after[] = {"な", "に", "で", "だ", "す", "じ", "。", "、", "！", "？", 0};
+            enough = i + 6 >= n || (uint8_t)s[i + 6] < 0x80;
+            for (int k = 0; after[k] && !enough; k++) enough = n - i - 6 >= 3 && !memcmp(s + i + 6, after[k], 3);
+        }
+        if (enough || (count == 1 ? !next_counter : next_kanji && !next_counter) || (!units && !next_counter)) {
+            if (o + (e - i) >= max - 24) break;
+            memcpy(out + o, s + i, e - i);   // (a positional run without a counter, 一四: as written)
+            o += e - i, i = e;
+            continue;
+        }
+        char num[24];
+        int k = 0;
+        if (!units) {   // positional: 二〇二六
+            for (int q = i; q < e && k < 20; q += 3) num[k++] = (char)('0' + ja_numeral(s, n, q, &l));
+        } else {        // with units: 二千二十六, 一億二千万
+            uint64_t total = 0, sec = 0, cur = 0;
+            for (int q = i; q < e; q += 3) {
+                int x = ja_numeral(s, n, q, &l);
+                if (x == -2) x = -1;
+                if (x >= 0 && x < 10) cur = (uint64_t)x;
+                else if (x >= 10 && x <= 1000) sec += (cur ? cur : 1) * (uint64_t)x, cur = 0;
+                else total += (sec + cur) * (x == -1 ? 1000000000000ull : (uint64_t)x), sec = cur = 0;
+            }
+            total += sec + cur;
+            k = snprintf(num, sizeof(num), "%llu", (unsigned long long)total);
+        }
+        memcpy(out + o, num, k);
+        o += k, i = e;
+    }
+    memcpy(s, out, o);
+    s[o] = 0;
+    return o;
+}
+
+static int script_pass(char* s, int n, int max, int L) {
+    if (L == JA) n = ja_kanji_numbers(s, n, max);
     int o = 0;
     for (int i = 0; i < n;) {
         int l;
@@ -1822,7 +1898,7 @@ int st_speak(char* s, int n, int max, const char* lang) {
     Buf b = {out, 0, (int)sizeof(out) < max ? (int)sizeof(out) : max, 0};
     out[0] = 0;
     St st = {s, n, lang_of(lang), &b, {0}, 0, 0, -1, 0, 0};
-    n = st.n = script_pass(s, n, st.L);
+    n = st.n = script_pass(s, n, max, st.L);
     if (st.L < 0) return n;   // (Greek and the rest: as written)
     for (int i = 0; i < n;) {
         int l;
@@ -1841,6 +1917,10 @@ int st_speak(char* s, int n, int max, const char* lang) {
             else if (b.n && b.p[b.n - 1] != ' ' && prev_alnum(s, i) && st.L != JA) put(&b, " ");   // PS4 -> pe ese cuatro
             uint64_t v = 0;
             for (int k = i; k < n && is_digit(s[k]) && k < i + 18; k++) v = v * 10 + (uint64_t)(s[k] - '0');
+            // Japanese: a number right after a kanji is kept apart from it (U+200B, which the tokenizer drops):
+            // its reading in hiragana would otherwise be taken for the kanji's okurigana (約さんじゅう -> 約さ, つまさ)
+            if (st.L == JA && b.n >= 3 && (uint8_t)b.p[b.n - 3] >= 0xE4 && (uint8_t)b.p[b.n - 3] <= 0xE9)
+                put(&b, "\xE2\x80\x8B");
             j = number(&st, i);
             if (j <= i) j = i + 1, putn(&b, s + i, 1);
             st.num_end = j, st.num_v = v;

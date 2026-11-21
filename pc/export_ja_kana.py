@@ -1,16 +1,17 @@
 """Japanese kanji readings for the voice: chat/assets/ja_kana.bin, from the dictionary of pykakasi 2.3.0 (the version
 Chatterbox Multilingual pins). The official tokenizer turns kanji into hiragana with pykakasi before its BPE; the
 app does the same in C (chat/ja_kana.c): at each kanji, the longest dictionary word that starts there, read with
-the first reading pykakasi would pick.
+the first reading pykakasi would pick, or the one in FIXES.
 
 Dictionary: pykakasi's kanwadict4 (the KAKASI dictionary, made from SKK's, plus part of UniDic) and itaijidict4
 (variant kanji -> their usual form). pykakasi and its dictionary are under GPL-3.0-or-later (KAKASI: GPL-2.0-or-
 later; UniDic: GPL-2.0 / LGPL-2.1 / BSD-3-Clause, the part in pykakasi relicensed as GPL-3.0-or-later), so the
 file can ship with this GPL-3.0 app (see CREDITS.md).
 
-Only words that can match are kept: the app looks words up in NFKD text (as the official tokenizer, which
-decomposes the text before pykakasi), so a word written with a voiced kana (が, ぱ...) or another character that
-NFKD changes never matches, nor a word with a variant kanji (the text is converted to the usual forms first).
+Words are looked up in the text as written (composed): the official tokenizer decomposes the text (NFKD) before
+pykakasi, so a word whose kana ending is voiced never matches there (食べる, 上がる, 近づく are read くべる, うえがる,
+きんづく); in composed text they do. Words with a variant kanji are dropped (the text is converted to the usual
+forms first), as are words with ASCII letters.
 
 ja_kana.bin:
   "PJKD", u32 n_variants, u32 n_first, u32 n_words
@@ -30,11 +31,16 @@ Run: python pc/export_ja_kana.py   (needs pykakasi==2.3.0: pip install pykakasi=
 import pickle
 import struct
 import sys
-import unicodedata
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "chat" / "assets" / "ja_kana.bin"
+
+
+# pykakasi's first reading of a few very common words is not the usual one: 今日は is read as the greeting
+# こんにちは, 人 as にん, 日 as にち, 月 as がつ, 日本 as にっぽん, 飯 (ご飯) as めし. These are read the usual way.
+FIXES = {"今日": "きょう", "今日は": "きょうは", "日本": "にほん", "人": "ひと", "日": "ひ", "月": "つき", "飯": "はん",
+         "表": "ひょう", "開け": "あけ", "入っ": "はいっ", "売上が": "うりあげが"}
 
 
 def k2h(s):   # pykakasi's katakana -> hiragana for the readings (IConv._k2h)
@@ -70,11 +76,10 @@ def main():
             y = next((y for y, cond in readings if cond is None), None)   # pykakasi: the first reading that applies
             if y is None:
                 continue
-            if (unicodedata.normalize("NFKD", key) != key or any(ord(c) in changed for c in key) or
-                    any(ord(c) < 0x3000 for c in key)):
+            if any(ord(c) in changed for c in key) or any(ord(c) < 0x3000 for c in key):
                 dropped += 1
                 continue
-            words[key] = k2h(y)
+            words[key] = k2h(FIXES.get(key, y))
     blocks = {}
     for key, y in words.items():
         blocks.setdefault(ord(key[0]), []).append((code(key[1:]), key, y))
@@ -100,6 +105,7 @@ def main():
     blob += b"".join(struct.pack("<II", a, b) for a, b in index) + data_blob
     OUT.write_bytes(blob)
     big = max(index[i + 1][1] - index[i][1] for i in range(len(index) - 1))
+    assert all(k in words for k in FIXES), [k for k in FIXES if k not in words]
     print(f"ja_kana.bin: {len(words)} words ({dropped} that can never match dropped), {len(index) - 1} first "
           f"characters, {len(var)} variants, largest block {big} bytes, {len(blob)} bytes")
 

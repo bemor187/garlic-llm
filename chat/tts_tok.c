@@ -1,5 +1,5 @@
 // Text tokenizer of Chatterbox Multilingual (see tts_tok.h), the C version of the official Python steps:
-// punc_norm -> lower() -> NFKD -> (Japanese: kanji as hiragana, then NFKD again) -> "[lang]" + text -> spaces
+// punc_norm -> lower() -> (Japanese: kanji as hiragana, see ja_kana.h) -> NFKD -> "[lang]" + text -> spaces
 // become [SPACE] -> added tokens matched first -> Whitespace pre-tokenizer (\w+ | [^\w\s]+) -> BPE with the merge
 // ranks -> ids, between start 255 and stop 0. Russian stress marks are added first when their dictionary is loaded
 // (ru_stress.h). The tables (lower case, NFKD, combining classes, \w) cover every codepoint.
@@ -255,12 +255,25 @@ int ttstok_encode(const TtsTok* t, const char* text, const char* lang, uint16_t*
     // lower(), then NFKD
     int n = 0;
     for (const char* s = src; *s && n < TT_CPS;) c1[n++] = lower_cp(t, next_cp(&s));
+    if (t->ja && !strcmp(lang, "ja")) {
+        // Japanese: kanji as hiragana first, in the text as written (the official tokenizer decomposes it before
+        // pykakasi, and then a word with a voiced kana ending, 食べる, never matches: see ja_kana.h). The CJK
+        // compatibility ideographs become the unified ones they stand for, as NFKD would make them.
+        for (int i = 0; i < n; i++)
+            if (c1[i] >= 0xF900 && c1[i] <= 0xFAFF) {
+                const uint8_t* d = nfkd_of(t, c1[i]);
+                if (d && d[4] == 1) c1[i] = rd32(d + 5);
+            }
+        n = jakana_convert(t->ja, c1, n, c2, TT_CPS - 64);
+        memcpy(c1, c2, (size_t)n * sizeof(c1[0]));
+    } else if (!strcmp(lang, "ja")) {   // (without the dictionary: still no zero-width space, see st_speak)
+        int o = 0;
+        for (int i = 0; i < n; i++)
+            if (c1[i] != 0x200B) c1[o++] = c1[i];
+        n = o;
+    }
     n = nfkd(t, c1, n, c2);
     const uint32_t* cps = c2;
-    if (t->ja && !strcmp(lang, "ja")) {   // kanji as hiragana (on the decomposed text, as the official), NFKD again
-        n = jakana_convert(t->ja, c2, n, c1, TT_CPS - 64);
-        n = nfkd(t, c1, n, c2);
-    }
     // "[lang]" in front and spaces as [SPACE]
     size_t o = (size_t)snprintf(b, sizeof(b), "[%s]", lang);
     for (int i = 0; i < n && o + 8 < sizeof(b); i++) {
