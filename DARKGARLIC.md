@@ -30,15 +30,17 @@ python pc/convert_9b_q4s.py --mtp
 
 ## Install
 
-The package from `python build_chat.py` (no `--full`) does not contain the weights. The app then reads `/data/qwen3.5-9b-q4s.bin` and `/data/qwen3.5-9b-mtp.bin`.
+`python build_chat.py --full` puts `qwen3.5-9b-q4s.bin` and `qwen3.5-9b-mtp.bin` inside the package at `/app0/models`. Nothing else has to be copied to `/data` for text chat and the API. Voice files are packed too when they are already in `models/`.
 
-A build of this branch produced:
+A build of this branch with the abliterated 9B weights inside produced:
 
 | File | Bytes | SHA-256 |
 |---|---:|---|
-| `IV0000-PSAI00001_00-PS4LOCALAICHAT01.pkg` | 41,091,072 | `0354ce449ba522d4c590f0c781e0f877eaa2246c88ee227ec4831c5e1379af32` |
+| `IV0000-PSAI00001_00-PS4LOCALAICHAT01.pkg` | 4,898,750,464 | `c1ec4183083186c09eb6a69e2a909766e7c45dce276520474e26c2adecc04817` |
 
-Title `DarkGarlic LLM`, version 1.20, title id `PSAI00001`. Install it from a USB drive with *Settings → Debug Settings → Game → Package Installer* on a console that already runs GoldHEN. The USB has to be exFAT.
+That file is too large for a GitHub release. The release asset `DarkGarlic-LLM-1.20.pkg` (41,091,072 bytes, SHA-256 `0354ce449ba522d4c590f0c781e0f877eaa2246c88ee227ec4831c5e1379af32`) is the same app with no weights, for people who upload the bins to `/data` themselves.
+
+Title `DarkGarlic LLM`, version 1.20, title id `PSAI00001`. Install from an exFAT USB drive with *Settings → Debug Settings → Game → Package Installer* on a console that already runs GoldHEN. The all-in-one package needs about 10 GB free if the console copies it to the internal disk before installing.
 
 ```bash
 set PS4_IP=192.168.1.5
