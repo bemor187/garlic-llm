@@ -507,6 +507,24 @@ int st_natural_cut(const char* text, int len, int from, int lo, int hi) { return
 int st_opener_cut(const char* text, int len, int from, int lo, int hi) { return natural_cut(text, len, from, lo, hi, 1); }
 
 int st_speech_tokens(const char* w, int n, const char* lang) {
+    // Japanese and Arabic: a weight per kind of character, fitted on T3's speech tokens for 25 sentences per
+    // language (numbers, dates, English words): kana, kanji (read as two or three kana), Arabic letters (harakat
+    // add nothing), digits (read as words), Latin letters. Off by about 7 % (ja) and 12 % (ar) per sentence.
+    int ja = !strcmp(lang, "ja");
+    if (ja || !strcmp(lang, "ar")) {
+        float t = 20.0f;
+        for (int i = 0; i < n;) {
+            int l;
+            uint32_t c = cp_at(w + i, &l);
+            if (c >= '0' && c <= '9') t += ja ? 6.3f : 12.5f;
+            else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) t += ja ? 4.4f : 3.0f;
+            else if (c >= 0x3041 && c <= 0x30FF) t += 2.6f;
+            else if ((c >= 0x4E00 && c <= 0x9FFF) || (c >= 0x3400 && c <= 0x4DBF)) t += 5.2f;
+            else if ((c >= 0x620 && c <= 0x64A) || (c >= 0x671 && c <= 0x6D3)) t += 2.5f;
+            i += l;
+        }
+        return (int)t;
+    }
     static const char* const l[] = {"es", "ru", "it", "pt", "fr", "de", "en"};
     static const float k[] = {1.77f, 1.46f, 1.55f, 1.80f, 1.15f, 1.30f, 1.25f};
     float r = 1.6f;
