@@ -350,8 +350,7 @@ static mp_obj_t g_input(size_t n, const mp_obj_t* a) {
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(g_input_obj, 0, 1, g_input);
 
 static mp_obj_t g_lang(void) {
-    static const char* codes[] = {"es", "en", "pt", "ru"};
-    return MP_OBJ_NEW_QSTR(qstr_from_str(codes[ui_lang >= 0 && ui_lang < N_LANGS ? ui_lang : 1]));
+    return MP_OBJ_NEW_QSTR(qstr_from_str(lang_codes[ui_lang >= 0 && ui_lang < N_LANGS ? ui_lang : LANG_EN]));
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(g_lang_obj, g_lang);
 

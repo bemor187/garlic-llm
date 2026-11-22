@@ -1231,9 +1231,11 @@ static void draw_kb_under(void) { draw_keyboard(&kb, kb_text, now()); }
 
 // The app's own keyboard. Returns 1 with the text in out when the user sends, 0 if they close it. With keep,
 // out already holds text to edit.
+static int ask_user(char* out, int max);
+
 static int keyboard_ex(char* out, int max, int keep, int over_current) {
     static int ready;
-    if (!ready) kb_init(&kb, ui_lang), ready = 1;   // KB_* follow LANG_*: the console's language first
+    if (!ready) kb_init(&kb, kb_layout_for(ui_lang)), ready = 1;   // the console's language first
     if (!keep) out[0] = 0;
     kb_text = out;
     if (!over_current) {
@@ -1279,6 +1281,11 @@ static int keyboard_ex(char* out, int max, int keep, int over_current) {
                 if (out[0] && out[strlen(out) - 1] != ' ') kb_append(out, max, " ");
                 kb_append(out, max, spoken);
             }
+            prev = read_buttons();
+        }
+        if (pressed & ORBIS_PAD_BUTTON_OPTIONS) {   // the system keyboard (Chinese, Japanese and Korean input
+            static char typed[2048];                // methods, a USB keyboard): its text is added
+            if (ask_user(typed, sizeof(typed))) kb_append(out, max, typed);
             prev = read_buttons();
         }
         if ((pressed & ORBIS_PAD_BUTTON_CROSS) && kb_press(&kb, out, max)) return out[0] != 0;

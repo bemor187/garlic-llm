@@ -73,10 +73,11 @@ After dictating, choose what to do with the text: ✕ send, △ edit, □ record
 | L2 (hold) | Dictate and add the text |
 | R2 | Send |
 | ○ | Close |
+| OPTIONS | The console's own keyboard (Chinese, Japanese and Korean input, a USB keyboard); its text is added |
 
 **Voice mode:** hold □ to talk (this also interrupts the answer), △ starts a new chat, ○ leaves voice mode.
 
-The interface follows the console's language: English, Spanish, Portuguese or Russian.
+The interface follows the console's language: English, Spanish, Portuguese, Russian, French, German, Arabic, Japanese, Chinese (Simplified and Traditional) or Korean. Arabic and Persian read right to left. The on-screen keyboard has a layout for each language except Chinese; for Chinese, press OPTIONS on the keyboard to use the console's own keyboard.
 
 ## How it works
 
@@ -207,7 +208,7 @@ The app's code is licensed under the [GNU General Public License v3.0](LICENSE).
 | Parakeet TDT 0.6B v3 (speech to text) | NVIDIA | CC-BY-4.0 |
 | MicroPython | The MicroPython project | MIT |
 | Twemoji | Twitter, Inc. and other contributors | CC-BY-4.0 |
-| Fonts: Selawik, Noto, Arimo, Inconsolata, Cascadia Mono | Their authors | SIL OFL 1.1 |
+| Fonts: Selawik, Noto (including Noto Sans Arabic, SC, TC, JP and KR), Arimo, Inconsolata, Cascadia Mono | Their authors | SIL OFL 1.1 |
 | DejaVu Sans | Its authors | Bitstream Vera licence and public domain |
 
 The complete notices are in [`CREDITS.md`](CREDITS.md) and ship inside the app.
