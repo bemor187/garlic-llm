@@ -1,5 +1,5 @@
 // Garlic LLM: chat with Qwen3.5 running on the PS4's own GPU, on the TV, with the controller; speech to text with
-// Parakeet. This file is the console side (screen, controller, microphone, the conversation with the engine);
+// Parakeet or Nemotron (by the console's language). This file is the console side (screen, controller, microphone, the conversation with the engine);
 // everything that draws is in ui.c.
 //
 // Chat: Cross = keyboard, hold Square = talk, Circle = stop the answer, Triangle = new conversation,
@@ -1489,7 +1489,7 @@ static void run_python_once(void) {
     }
 }
 
-// With the 9B, Parakeet's weights take 338 MiB of system memory, which leaves too little for Python's thread (8 MiB
+// With the 9B, the dictation weights take 338 MiB of system memory, which leaves too little for Python's thread (8 MiB
 // of stack) and heap (up to 64 MiB). They are released while the program runs (run_python), and a thread reads them
 // back afterwards (~4 s); dictation waits for it if needed.
 static OrbisPthread asr_th;
@@ -1888,6 +1888,65 @@ static void api_chat_end(void) {
 
 #include "api_run.inc"   // the OpenAI-compatible API's jobs on the model (api.c serves the requests)
 
+// ---- the dictation model -----------------------------------------------------------------------------------------
+// Parakeet knows 25 European languages and is the more accurate in them. Nemotron 3.5 ASR takes the spoken language as
+// a prompt; it is used when the console is set to a language Parakeet does not know. Only one is loaded (they take
+// the same memory); if Nemotron's files are missing, Parakeet is loaded instead.
+// Test aid: /data/garlic_asr.txt overrides the choice with "parakeet", or "nemotron" and optionally a language (a
+// name from the table below or a prompt number, 0..127), e.g. "nemotron ja-JP". Without one, the console's, or "auto"
+// (the model detects the language).
+#define ASR_FILE "/data/garlic_asr.txt"
+
+static const struct {
+    int sys;            // OrbisSystemParamLanguage, or -1: only for garlic_asr.txt
+    const char* name;   // Nemotron's name for it
+    int prompt;         // its prompt (the model's processor_config.json)
+} asr_langs[] = {
+    {ORBIS_SYSTEM_PARAM_LANG_ARABIC, "ar-AR", 7},     {ORBIS_SYSTEM_PARAM_LANG_JAPANESE, "ja-JP", 10},
+    {ORBIS_SYSTEM_PARAM_LANG_KOREAN, "ko-KR", 14},    {ORBIS_SYSTEM_PARAM_LANG_CHINESE_S, "zh-CN", 4},
+    // the model's Mandarin is zh-CN (its zh-TW prompt is not trained), so it writes simplified characters
+    {ORBIS_SYSTEM_PARAM_LANG_CHINESE_T, "zh-CN", 4},  {ORBIS_SYSTEM_PARAM_LANG_TURKISH, "tr-TR", 18},
+    {ORBIS_SYSTEM_PARAM_LANG_VIETNAMESE, "vi-VN", 33},
+    {-1, "en-US", 0}, {-1, "en-GB", 1}, {-1, "es-ES", 2}, {-1, "es-US", 3}, {-1, "fr-FR", 8}, {-1, "de-DE", 9},
+    {-1, "it-IT", 15}, {-1, "pt-BR", 12}, {-1, "pt-PT", 13}, {-1, "ru-RU", 11}, {-1, "auto", 101},
+};
+#define N_ASR_LANGS (int)(sizeof(asr_langs) / sizeof(asr_langs[0]))
+
+static void asr_start(int sys_lang) {
+    int model = ASR_PARAKEET, li = -1;
+    for (int i = 0; i < N_ASR_LANGS; i++)
+        if (asr_langs[i].sys == sys_lang) model = ASR_NEMOTRON, li = i;
+    int prompt = li >= 0 ? asr_langs[li].prompt : 101;
+    size_t sz;
+    char* f = (char*)read_all(ASR_FILE, &sz);
+    if (f && sz) {
+        char b[48] = {0}, word[2][16] = {{0}};
+        memcpy(b, f, sz < sizeof(b) - 1 ? sz : sizeof(b) - 1);
+        int nw = sscanf(b, "%15s %15s", word[0], word[1]);
+        if (nw >= 1 && !strcmp(word[0], "parakeet")) model = ASR_PARAKEET;
+        if (nw >= 1 && !strcmp(word[0], "nemotron")) {
+            model = ASR_NEMOTRON;
+            for (int i = 0; nw == 2 && i < N_ASR_LANGS; i++)
+                if (!strcmp(word[1], asr_langs[i].name)) prompt = asr_langs[i].prompt;
+            if (nw == 2 && word[1][0] >= '0' && word[1][0] <= '9') prompt = atoi(word[1]) & 127;
+        }
+        say("dictation: %s says \"%s %s\"", ASR_FILE, word[0], word[1]);
+    }
+    free(f);
+    if (model == ASR_NEMOTRON) {
+        if (asr_init(&eng, ASSETS, ASR_NEMOTRON, prompt) == 0) {
+            say("speech to text ready (Nemotron 3.5 ASR, prompt %d): up to %u s of audio", prompt,
+                eng.asr.max_frames * 8 / 100);
+            return;
+        }
+        say("Nemotron 3.5 ASR not available: Parakeet instead");
+    }
+    if (asr_init(&eng, ASSETS, ASR_PARAKEET, 0) == 0)
+        say("speech to text ready (Parakeet TDT 0.6B v3): up to %u s of audio", eng.asr.max_frames * 8 / 100);
+    else
+        say("speech to text not available (missing or no GPU memory left)");
+}
+
 int main(void) {
     if (rename(LOG_FILE, LOG_PREV)) unlink(LOG_FILE);   // the last log of this app is kept, as LOG_PREV
     say("starting");
@@ -1930,10 +1989,7 @@ int main(void) {
         say("T3 not loaded: %s", eng.error);
     }
     loading((void*)tr(S_LOADING_VOICE), 0.99f, NULL);
-    if (asr_init(&eng, ASSETS) == 0)
-        say("speech to text ready: up to %u s of audio", eng.asr.max_frames * 8 / 100);
-    else
-        say("speech to text not available (missing or no GPU memory left)");
+    asr_start(lang);
     size_t flex0 = 0;   // system memory left (the 9B's dictation weights live there; Python borrows them)
     ((int32_t(*)(size_t*))sceKernelAvailableFlexibleMemorySize)(&flex0);
     say("GPU memory used: %u of %u MiB; system RAM free: %u MiB", (unsigned)(eng.next >> 20),

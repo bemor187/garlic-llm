@@ -2217,7 +2217,7 @@ void draw_loading(float frac, const char* what) {
     char line_[160];
     snprintf(line_, sizeof(line_), "%s…  %d %%", what, (int)(clamp01(frac) * 100));
     draw_center(&font_small, cx, y + 30, line_, C_TEXT_DIM);
-    draw_center(&font_small, cx, SCREEN_H - 90, "Qwen3.5  ·  Parakeet  ·  Chatterbox", C_TEXT_MUTED);
+    draw_center(&font_small, cx, SCREEN_H - 90, "Qwen3.5  ·  Parakeet  ·  Nemotron  ·  Chatterbox", C_TEXT_MUTED);
 }
 
 void draw_error(const char* what) {

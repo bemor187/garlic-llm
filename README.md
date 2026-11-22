@@ -16,7 +16,7 @@ Garlic LLM is a homebrew app for the PlayStation 4. It runs [Qwen3.5-9B](https:/
 |---|---|
 | **Text chat** | Qwen3.5-9B at 31–39 tokens/s, and up to 43 tokens/s on code. 16K-token context. |
 | **Voice conversation** | Speak and it answers aloud (Chatterbox) in Spanish, English, Portuguese, Russian, Italian, French, German, Arabic and Japanese. |
-| **Dictation** | Hold a button and talk instead of typing (Parakeet TDT 0.6B v3), in 25 European languages. |
+| **Dictation** | Hold a button and talk instead of typing. It understands 25 European languages (Parakeet TDT 0.6B v3), and Arabic, Japanese, Korean, Chinese, Turkish and Vietnamese when the console is set to one of them (Nemotron 3.5 ASR). |
 | **Python mode** | Ask for a program. It writes MicroPython and the console runs it. |
 | **Think mode** | The model reasons before it answers. Off by default; a thought takes about half a minute. |
 
@@ -149,7 +149,8 @@ A plain build keeps the weights outside the package. The app looks for each of t
 |---|---|---|
 | `qwen3.5-9b-q4s.bin` | 4.32 GiB | Qwen3.5-9B |
 | `qwen3.5-9b-mtp.bin` | 0.20 GiB | The MTP head for speculative decoding |
-| `parakeet-v3-q4i.bin` | 0.33 GiB | Speech to text |
+| `parakeet-v3-q4i.bin` | 0.33 GiB | Speech to text in the European languages |
+| `nemotron-3.5-asr-q4i.bin` | 0.33 GiB | Speech to text in Arabic, Japanese, Korean, Chinese, Turkish and Vietnamese |
 | `chatterbox-t3.bin` | 0.29 GiB | Text to speech, first stage |
 | `chatterbox-s3gen-mf.bin` | 0.09 GiB | Text to speech, second stage |
 
@@ -173,6 +174,7 @@ The scripts that made them from the original checkpoints are in `pc/`, and each 
 
 - **"Couldn't start".** A model file is missing or incomplete. Install the package again. With a build from source, check the files in `/data` against the table above.
 - **Dictation hears nothing.** Check that the console sees your microphone, and keep □ held while you speak.
+- **Dictation writes the wrong language.** It follows the console's language. To dictate in Arabic, Japanese, Korean, Chinese, Turkish or Vietnamese, set the console to that language (*Settings → Language*) and open the app again.
 - **Anything else.** The app writes a log to `/data/ps4ai_log.txt`. Attach it when you [open an issue](https://github.com/leonardo-alegria/garlic-llm/issues).
 
 ## Questions
@@ -208,6 +210,7 @@ The app's code is licensed under the [GNU General Public License v3.0](LICENSE).
 | Voices for Russian, Arabic and Japanese | Mozilla Common Voice contributors | CC0-1.0 |
 | Japanese kanji readings (pykakasi's dictionary, from KAKASI and UniDic) | Hiroshi Miura and contributors, the KAKASI authors | GPL-3.0-or-later |
 | Parakeet TDT 0.6B v3 (speech to text) | NVIDIA | CC-BY-4.0 |
+| Nemotron 3.5 ASR (speech to text) | NVIDIA | OpenMDW-1.1 |
 | MicroPython | The MicroPython project | MIT |
 | Twemoji | Twitter, Inc. and other contributors | CC-BY-4.0 |
 | Fonts: Selawik, Noto (including Noto Sans Arabic, SC, TC, JP and KR), Arimo, Inconsolata, Cascadia Mono | Their authors | SIL OFL 1.1 |

@@ -25,8 +25,11 @@ typedef struct {
 
 typedef void (*ProgressFn)(void* user, float fraction, const char* what);
 
-// Speech to text: Parakeet TDT 0.6B v3 (assets/asr.idx, asr_vocab.bin; weights in /data), in the GPU memory left
-// after the language model.
+// Speech to text, one of two models (asr_init), in the GPU memory left after the language model; weights in /data:
+// Parakeet TDT 0.6B v3 (assets/asr.idx, asr_vocab.bin) or Nemotron 3.5 ASR (assets/asr_nm.idx, asr_nm_vocab.bin),
+// which takes the spoken language as a prompt and uses the same work memory.
+enum { ASR_PARAKEET, ASR_NEMOTRON };
+
 typedef struct {
     char name[32];
     uint64_t off, size;
@@ -36,6 +39,9 @@ typedef struct {
 
 typedef struct {
     int ready;
+    int kind;                   // ASR_PARAKEET or ASR_NEMOTRON
+    int prompt;                 // Nemotron's language prompt (0..127)
+    uint32_t n_vocab, blank, n_dur;   // the joint's token outputs (the blank is one of them) and durations after them
     AsrTensor* t;
     uint32_t nt;
     char path[129];
@@ -43,9 +49,11 @@ typedef struct {
     float* mel;                 // [128][257] filter bank (CPU copy)
     uint8_t* vocab;             // "PVOC" blob
     uint32_t* piece;            // offset of each token's piece in vocab
+    uint32_t n_pieces;
     uint32_t max_frames;        // encoder frames (80 ms each) that fit
     uint64_t mel_in, pe, sub_a, sub_b, x, h, f, qkv, r, att, g2, g, encp;
     uint64_t xh0, xh1, c0, c1, gates, dec, jin, logits, res, dummy;
+    uint64_t pbias;             // Nemotron: the prompt projector's bias for the language (2048 floats)
     uint64_t ws_begin, ws_end;  // its GPU work buffers (free for others while it is not transcribing)
     uint64_t flex_len;          // the weights are in flexible (system) memory, this long; 0 if in GPU memory
     volatile int unloaded;      // the weights were released (asr_release); asr_reload brings them back
@@ -243,8 +251,9 @@ void engine_reset(Engine* e);
 // (save 0), so that the conversation can go back to the position where they were saved. 0 = done.
 uint64_t engine_state_size(const Engine* e);
 int engine_state_copy(Engine* e, uint64_t buf, int save);
-// Load Parakeet into the GPU memory still free (after engine_init). 0 if ready, -1 if missing or too big.
-int asr_init(Engine* e, const char* assets_dir);
+// Load the dictation model (ASR_PARAKEET or ASR_NEMOTRON; prompt: Nemotron's language) into the GPU memory still
+// free (after engine_init). 0 if ready, -1 if missing or too big (nothing is kept then: the other one can be tried).
+int asr_init(Engine* e, const char* assets_dir, int model, int prompt);
 int engine_flex_test(Engine* e);
 // Load T3 into the GPU memory still free. 0 if ready.
 int t3_init(Engine* e, const char* assets_dir);
@@ -278,9 +287,9 @@ uint64_t engine_kv_lend(Engine* e, uint64_t* size);
 void engine_kv_return(Engine* e);
 // 16 kHz mono audio -> UTF-8 text. Returns 0, or -1 with e->error set.
 int asr_transcribe(Engine* e, const float* audio, int n, char* text, int max);
-// With the 9B, Parakeet's weights live in system memory (338 MiB), which leaves ~20 MiB for everything else. asr_release
-// gives them back while Python runs (it needs a heap of up to 64 MiB); asr_reload maps and reads them again (~4 s,
-// safe to call from another thread; 0 when ready). Both do nothing if the weights are in GPU memory.
+// With the 9B, the dictation weights (Parakeet's or Nemotron's, 338 MiB) live in system memory, which leaves ~20 MiB
+// for everything else. asr_release gives them back while Python runs (it needs a heap of up to 64 MiB); asr_reload
+// maps and reads them again (~4 s, safe to call from another thread; 0 when ready). Both do nothing if the weights are in GPU memory.
 void asr_release(Engine* e);
 // While released (the 9B): the weights' memory, still mapped, for Python's heap and stack (NULL and 0 otherwise).
 void* asr_lent(Engine* e, uint64_t* size);
