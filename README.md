@@ -17,8 +17,8 @@ Garlic LLM is a homebrew app for the PlayStation 4. It runs [Qwen3.5-9B](https:/
 | Feature | Details |
 |---|---|
 | **Text chat** | Qwen3.5-9B at 31–39 tokens/s, and up to 43 tokens/s on code. 16K-token context. |
-| **Voice conversation** | Speak and it answers aloud (Chatterbox) in English, Spanish, Portuguese, Russian, Italian, French and German. Version 1.21 adds Arabic and Japanese. |
-| **Dictation** | Hold a button and talk instead of typing. It understands 25 European languages (Parakeet TDT 0.6B v3). Version 1.21 adds Arabic, Japanese, Korean, Chinese, Turkish and Vietnamese (Nemotron 3.5 ASR), when the console is set to one of them. |
+| **Voice conversation** | Speak and it answers aloud (Chatterbox) in English, Spanish, Portuguese, Russian, Italian, French and German. Version 1.21 adds Arabic and Japanese; it does not speak Chinese or Korean yet. |
+| **Dictation** | Hold a button and talk instead of typing. It understands 25 European languages (Parakeet TDT 0.6B v3). Version 1.21 adds Arabic, Japanese, Korean, Chinese, Turkish and Vietnamese (Nemotron 3.5 ASR), when the console is set to one of them; with the console in Traditional Chinese, it writes simplified characters. |
 | **Interface** | It follows the console's language: English, Spanish, Portuguese or Russian. Version 1.21 adds French, German, Arabic, Japanese, Simplified Chinese, Traditional Chinese and Korean. |
 | **Python mode** | Ask for a program. It writes MicroPython and the console runs it. |
 | **Think mode** | The model reasons before it answers. Off by default; a thought takes about half a minute. |
