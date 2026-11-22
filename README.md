@@ -8,6 +8,8 @@ Garlic LLM is a homebrew app for the PlayStation 4. It runs [Qwen3.5-9B](https:/
 
 [Website](https://garlicllm.dev) · [Download](#install) · [Demo video](https://garlicllm.dev/#demo) · [Support the project](#support)
 
+> **Test version 1.21.** The interface in 11 languages, spoken replies in Arabic and Japanese, dictation in six more languages, the PS4 Pro's native mode, other Qwen3.5-9B models, and tools in the API. It has not been tested on a console yet: [download it](https://garlicllm.dev/download/#h-exp) and tell us how it went in an [issue](https://github.com/leonardo-alegria/garlic-llm/issues). The release is still 1.19. This page describes 1.21, and what is new in 1.21 says so.
+
 ![Garlic LLM answering a question on a PS4](docs/chat.png)
 
 ## What it does
@@ -15,20 +17,20 @@ Garlic LLM is a homebrew app for the PlayStation 4. It runs [Qwen3.5-9B](https:/
 | Feature | Details |
 |---|---|
 | **Text chat** | Qwen3.5-9B at 31–39 tokens/s, and up to 43 tokens/s on code. 16K-token context. |
-| **Voice conversation** | Speak and it answers aloud (Chatterbox) in 9 languages: English, Spanish, Portuguese, Russian, Italian, French, German, Arabic and Japanese. |
-| **Dictation** | Hold a button and talk instead of typing. It understands 25 European languages (Parakeet TDT 0.6B v3), plus Arabic, Japanese, Korean, Chinese, Turkish and Vietnamese (Nemotron 3.5 ASR) when the console is set to one of them. |
-| **Interface** | In 11 languages. It follows the console's language: English, Spanish, Portuguese, Russian, French, German, Arabic, Japanese, Simplified Chinese, Traditional Chinese and Korean. |
+| **Voice conversation** | Speak and it answers aloud (Chatterbox) in English, Spanish, Portuguese, Russian, Italian, French and German. Version 1.21 adds Arabic and Japanese. |
+| **Dictation** | Hold a button and talk instead of typing. It understands 25 European languages (Parakeet TDT 0.6B v3). Version 1.21 adds Arabic, Japanese, Korean, Chinese, Turkish and Vietnamese (Nemotron 3.5 ASR), when the console is set to one of them. |
+| **Interface** | It follows the console's language: English, Spanish, Portuguese or Russian. Version 1.21 adds French, German, Arabic, Japanese, Simplified Chinese, Traditional Chinese and Korean. |
 | **Python mode** | Ask for a program. It writes MicroPython and the console runs it. |
 | **Think mode** | The model reasons before it answers. Off by default; a thought takes about half a minute. |
 
 Everything runs on the console. Nothing is sent anywhere.
 
-Speeds were measured on a base/Slim PS4. On a PS4 Pro, Garlic LLM runs in the Pro's native mode, uses its full GPU and reaches up to 60 tokens/s. In voice mode the chat model runs at about 22 tokens/s, because the voice model takes the memory that speculative decoding uses.
+Speeds were measured on a base/Slim PS4. On a PS4 Pro, chat runs at up to 45 tokens/s. Version 1.21 runs in the Pro's native mode, which uses its full GPU, and reaches up to 60 tokens/s. In voice mode the chat model runs at about 22 tokens/s, because the voice model takes the memory that speculative decoding uses.
 
 ## Requirements
 
-- A PS4, PS4 Slim or PS4 Pro running [GoldHEN](https://github.com/GoldHEN/GoldHEN). It works on firmware 9.00, 9.04, 11.00, 11.52, 12.02, 12.50, 13.52 and 14.00.
-- About 6.5 GB of free space, or 13 GB if you copy the package to the console's own disk before installing it.
+- A PS4, PS4 Slim or PS4 Pro running [GoldHEN](https://github.com/GoldHEN/GoldHEN). It works on firmware 9.00, 9.04, 11.00, 11.52, 12.02, 12.50, 13.50, 13.52 and 14.00.
+- About 6 GB of free space, or 12 GB if you copy the package to the console's own disk before installing it. Version 1.21 needs about 6.5 GB, or 13 GB.
 - To use your voice: any ordinary microphone the console recognises.
 - To type on a real keyboard: any USB keyboard. Press OPTIONS in the chat to open the console's keyboard.
 
@@ -36,11 +38,11 @@ Other firmware versions are not tested yet. If you try one, please [open an issu
 
 ## Install
 
-1. Download the all-in-one package (about 6.0 GB, models inside) from [Hugging Face](https://huggingface.co/garlic-llm/garlic-llm-ps4).
+1. Download the all-in-one package, with the models inside: version 1.19 (about 5.7 GB) from [garlicllm.dev](https://garlicllm.dev/download/) or [Hugging Face](https://huggingface.co/garlic-llm/garlic-llm-ps4), or the test version 1.21 (about 6.0 GB) from [garlicllm.dev](https://garlicllm.dev/download/#h-exp).
 2. Copy the PKG to the console and install it like any other homebrew package (*Settings → Debug Settings → Game → Package Installer*).
 3. Open **Garlic LLM** from the home screen. The first screen loads the model; after that it needs no PC and no connection.
 
-**Updating.** Download the new package and install it over the old one. The models are inside, so there is nothing else to copy.
+**Updating.** Download the new package and install it over the old one. The models are inside, so there is nothing else to copy. To go back from 1.21 to 1.19, install 1.19 again.
 
 ## Controls
 
@@ -74,11 +76,11 @@ After dictating, choose what to do with the text: ✕ send, △ edit, □ record
 | L2 (hold) | Dictate and add the text |
 | R2 | Send |
 | ○ | Close |
-| OPTIONS | The console's own keyboard (Chinese, Japanese and Korean input, a USB keyboard); its text is added |
+| OPTIONS | The console's own keyboard (a USB keyboard; in 1.21 also Chinese, Japanese and Korean input); its text is added |
 
 **Voice mode:** hold □ to talk (this also interrupts the answer), △ starts a new chat, ○ leaves voice mode.
 
-The interface follows the console's language. Arabic and Persian text reads right to left. The on-screen keyboard has a layout for each interface language except Chinese; for Chinese, press OPTIONS on the keyboard to use the console's own keyboard.
+The interface follows the console's language. In 1.21, Arabic and Persian text reads right to left, and the on-screen keyboard has a layout for each interface language except Chinese; for Chinese, press OPTIONS on the keyboard to use the console's own keyboard.
 
 ## How it works
 
@@ -98,7 +100,7 @@ The app is built with the open-source [OpenOrbis](https://github.com/OpenOrbis/O
 
 Garlic LLM can serve an OpenAI-compatible API on your network, so that your own programs and apps use the model on the console. It is off until you turn it on.
 
-> The API is new in version 1.20.
+> The API came with the test version 1.20. This section describes 1.21, which adds tools, reasoning, `context_length`, the usage in streams, `/health`'s busy state and requests of up to 1 MiB.
 
 **Turn it on.** On the chat screen, press **L3** (click the left stick). The top of the screen then shows where the API listens, for example `API · 192.168.1.5:8080`. L3 again turns it off, and the app remembers the choice for the next time.
 
@@ -131,6 +133,8 @@ curl http://192.168.1.5:8080/v1/chat/completions \
 - To try a client without a console, [`tests/api_host/`](tests/api_host/) builds a server for Windows with this same API and a stand-in model that greets, calls tools and reads their results back. The first lines of its `server.c` say how to build and run it.
 
 ## Use another model
+
+> New in version 1.21.
 
 Garlic LLM can start another model instead of the built-in Qwen3.5-9B: a fine-tune of Qwen3.5-9B that keeps its shapes and tokenizer, such as a coding model or an abliterated one. Other architectures and bigger models do not run.
 
@@ -218,7 +222,7 @@ The scripts that made them from the original checkpoints are in `pc/`, and each 
 ## Troubleshooting
 
 - **"Couldn't start".** A model file is missing or incomplete. Install the package again. With a build from source, check the files in `/data` against the table above.
-- **"This model can't be used".** The chosen folder in `/data/garlic/models` does not match the built-in model, and the app started the built-in one. Convert the model again and copy it with `python pc/upload_model.py --model`, which checks the folder first.
+- **"This model can't be used"** (1.21). The chosen folder in `/data/garlic/models` does not match the built-in model, and the app started the built-in one. Convert the model again and copy it with `python pc/upload_model.py --model`, which checks the folder first.
 - **Dictation hears nothing.** Check that the console sees your microphone, and keep □ held while you speak.
 - **Dictation writes the wrong language.** It follows the console's language. To dictate in Arabic, Japanese, Korean, Chinese, Turkish or Vietnamese, set the console to that language (*Settings → Language*) and open the app again.
 - **Anything else.** The app writes a log to `/data/ps4ai_log.txt`. Attach it when you [open an issue](https://github.com/leonardo-alegria/garlic-llm/issues).
@@ -227,7 +231,7 @@ The scripts that made them from the original checkpoints are in `pc/`, and each 
 
 **Does it need internet?** No. The model, the voices and the speech recognition run on the console.
 
-**Does it run on a PS4 Pro?** Yes. Garlic LLM runs in the Pro's native mode, which uses its full GPU, and reaches up to 60 tokens/s.
+**Does it run on a PS4 Pro?** Yes. Version 1.19 runs at up to 45 tokens/s, as if the Pro were a base PS4. Version 1.21 runs in the Pro's native mode, which uses its full GPU, and reaches up to 60 tokens/s.
 
 **And on a PS5?** No. Garlic LLM is written for the PS4's GPU and system software.
 
