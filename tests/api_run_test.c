@@ -2,6 +2,7 @@
 // without the PS4. The real file is included as main.c includes it. Every test runs twice: one token per step
 // (engine_run), and several per step as with the MTP head (engine_spec_step).
 // Build and run: gcc -std=gnu99 -Wall -Wextra -g -fsanitize=address,undefined -I chat tests/api_run_test.c chat/api_proto.c -o build/api_run_test && build/api_run_test
+// (on Windows: zig cc instead of gcc, -fsanitize=undefined only)
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -57,6 +58,7 @@ static int fail_engine_at = -1;   // the engine fails on this call (-1: never)
 static int spec_on;               // the mock MTP head is on: a step keeps up to spec_keep tokens of its draft
 static int spec_keep = 2;
 static int next_pos, pos_errors;  // where the next token must go; steps given another position
+static int ctx_errors;            // tokens given a position past the context window (eng.ctx_limit)
 static int fed;                   // tokens of the reply fed to the model
 // what main.c shows of a job: begun and ended (they must pair), and Circle held from stop_at tokens on (-1: never)
 static int chat_begun, chat_ended, chat_replies, stop_at = -1;
@@ -89,9 +91,10 @@ int api_send(int fd, const char* p, size_t n) {
 }
 const char* api_model(void) { return "Qwen3.5-9B"; }
 static int client_left;   // the client of a waiting request has closed its connection
+static int gone_after = -1;   // the client closes its connection once this many tokens of the reply are fed
 int api_client_gone(int fd) {
     (void)fd;
-    return client_left;
+    return client_left || (gone_after >= 0 && fed >= gone_after);
 }
 static void say(const char* fmt, ...) {
     (void)fmt;
@@ -159,6 +162,7 @@ static int engine_run(MockEngine* e, const uint32_t* tokens, int n, int pos0, fl
     }
     last_temp = temperature;
     if (pos0 != next_pos) pos_errors++;
+    if (pos0 + n > e->ctx_limit) ctx_errors++;
     next_pos += n;
     if (prompt_phase) *next = script_k < script_len ? script[script_k] : IM_END;   // (taken when the reply begins)
     else if (script_k < script_len) *next = script[script_k++];
@@ -185,6 +189,7 @@ static int engine_spec_step(MockEngine* e, uint32_t tk, int pos0, float temperat
     while (k < spec_keep && k < max_new - 1 && script_k < script_len) out[k++] = script[script_k++];
     *n_out = k;
     if (pos0 != next_pos) pos_errors++;
+    if (pos0 + 1 + k > e->ctx_limit) ctx_errors++;
     next_pos += 1 + k;
     fed += 1 + k;
     if (script_k < script_len) *next = script[script_k++];
@@ -226,6 +231,41 @@ static void run_job(const char* body, const uint32_t* sc, int sc_len) {
 static const char* body_of(const char* w) {
     const char* b = strstr(w, "\r\n\r\n");
     return b ? b + 4 : w;
+}
+
+// The id of the last reply's i-th tool call: "call_", the reply's id after "chatcmpl-", "_i".
+static const char* call_id(int i) {
+    static char out[64];
+    const char* p = strstr(wire, "\"id\":\"chatcmpl-");
+    const char* q = p ? strchr(p + 15, '"') : NULL;
+    if (!q) return "?";
+    snprintf(out, sizeof(out), "call_%.*s_%d", (int)(q - p - 15), p + 15, i);
+    return out;
+}
+
+// The error message of the last answer (empty if none).
+static const char* error_message(void) {
+    static char out[1024];
+    const char* m = strstr(wire, "\"error\":{\"message\":\"");
+    const char* e = m ? strstr(m, "\",\"type\"") : NULL;
+    out[0] = 0;
+    long k = (long)strlen("\"error\":{\"message\":\"");
+    if (m && e && e - m - k < (long)sizeof(out)) snprintf(out, sizeof(out), "%.*s", (int)(e - m - k), m + k);
+    return out;
+}
+
+// 1 if text begins with head
+static int starts(const char* text, const char* head) { return strncmp(text, head, strlen(head)) == 0; }
+
+// 1 if text has word in it, in any case
+static int has_word(const char* text, const char* word) {
+    size_t n = strlen(word);
+    for (const char* p = text; *p; p++) {
+        size_t i = 0;
+        while (i < n && p[i] && (p[i] | 32) == word[i]) i++;
+        if (i == n) return 1;
+    }
+    return 0;
 }
 
 static void test_completion(void) {
@@ -276,6 +316,10 @@ static void test_errors(void) {
     run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"x\"}],\"max_tokens\":200}", NULL, 0);
     CHECK(strncmp(wire, "HTTP/1.1 400 Bad Request", 23) == 0);
     CHECK(strstr(wire, "context_length_exceeded") != NULL);
+    // as OpenAI words it, so clients read the window and the prompt's size from it
+    CHECK(!strcmp(error_message(), "This model's maximum context length is 100 tokens. However, you requested 226 tokens "
+                                   "(26 in the messages, 200 in the completion). Please reduce the length of the "
+                                   "messages or completion."));
     eng.ctx_limit = 4096;
     CHECK(msgs_cleared == cleared && chat_begun == begun);   // a refused request leaves the conversation on screen
 
@@ -325,6 +369,23 @@ static void test_client_gone(void) {
     run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"x\"}]}", sc, 3);
     client_left = 0;
     CHECK(engine_calls == 0 && wire_n == 0 && chat_begun == begun);
+
+    // a whole reply (nothing is sent until it ends) whose client closes the connection meanwhile: seen within
+    // API_LOOK tokens, and nothing more is written; the same in a tool call that is streamed
+    static uint32_t many[400];
+    for (int i = 0; i < 400; i++) many[i] = 'a' + 1;
+    gone_after = 40;
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"x\"}]}", many, 400);
+    CHECK(fed >= 40 && fed <= 40 + API_LOOK + 3 && wire_n == 0);
+    static uint32_t call[400];
+    int k = 0;
+    call[k++] = TOOL_CALL;
+    while (k < 400) call[k++] = 'a' + 1;
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"x\"}],\"stream\":true,"
+            "\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"f\"}}]}", call, 400);
+    CHECK(fed >= 40 && fed <= 40 + API_LOOK + 3 && strstr(wire, "data: [DONE]") == NULL);
+    gone_after = -1;
+    CHECK(pos == 0);
 }
 
 // Several tokens per step: the reply is the same, in fewer steps, and never past max_tokens.
@@ -391,6 +452,7 @@ static void test_long_prompt(void) {
     run_job(long_body(15000, 509, 1), NULL, 0);
     CHECK(strncmp(wire, "HTTP/1.1 400 Bad Request", 23) == 0);
     CHECK(strstr(wire, "context_length_exceeded") != NULL);
+    CHECK(strstr(error_message(), "However, your messages take more than 16256 tokens.") != NULL);
     CHECK(engine_calls == 0);
     CHECK(msgs_cleared == cleared && chat_begun == begun);
 
@@ -567,17 +629,24 @@ static void test_tools(void) {
                      "{\"type\": \"function\", \"function\": {\"name\": \"get_weather\"", 107) == 0);
     CHECK(strstr(p, "</IMPORTANT>\n\nBe brief.<S:1>\n<S:0>user\nWeather?<S:1>\n<S:0>assistant\n") != NULL);
     // the call, in OpenAI's form: integer arguments as numbers, content null
-    CHECK(strstr(wire, "\"content\":null,\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":"
-                       "{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Lima\\\",\\\"days\\\":3}\"}}]") != NULL);
+    char want[512];
+    snprintf(want, sizeof(want), "\"content\":null,\"tool_calls\":[{\"id\":\"%s\",\"type\":\"function\",\"function\":"
+             "{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Lima\\\",\\\"days\\\":3}\"}}]", call_id(1));
+    CHECK(strstr(wire, want) != NULL);
     CHECK(strstr(wire, "\"finish_reason\":\"tool_calls\"") != NULL);
+    char first_id[64];
+    snprintf(first_id, sizeof(first_id), "%s", call_id(1));
 
     // streamed: the words before the call go out, the call's text does not, the call comes whole at the end
     k = reply_of("Checking.\n\n" WEATHER_CALL);
     run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"Weather?\"}]," WEATHER_TOOL ",\"stream\":true}", reply_sc, k);
     CHECK(strstr(wire, "\"delta\":{\"content\":\"C\"}") != NULL);
     CHECK(strstr(wire, "function=") == NULL);
-    CHECK(strstr(wire, "\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\","
-                       "\"function\":{\"name\":\"get_weather\"") != NULL);
+    CHECK(strstr(wire, "\"content\":\"\\n") == NULL);   // (the blank line before the call is not sent: as a whole reply)
+    snprintf(want, sizeof(want), "\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"%s\",\"type\":\"function\","
+             "\"function\":{\"name\":\"get_weather\"", call_id(1));
+    CHECK(strstr(wire, want) != NULL);
+    CHECK(strcmp(call_id(1), first_id) != 0 && strncmp(first_id, "call_", 5) == 0);   // (another reply, another id)
     CHECK(strstr(wire, "\"finish_reason\":\"tool_calls\"") != NULL && strstr(wire, "data: [DONE]") != NULL);
 
     // a reply without a call is a plain answer, even with tools
@@ -615,6 +684,148 @@ static void test_tool_choice(void) {
     CHECK(strstr(p, "<S:0>assistant\n<S:2>\n\n<S:3>\n\n<S:13>\n<function=get_weather>\n") != NULL);
     CHECK(strstr(wire, "\"arguments\":\"{\\\"city\\\":\\\"Cusco\\\"}\"") != NULL);
     CHECK(strstr(wire, "\"finish_reason\":\"tool_calls\"") != NULL);
+}
+
+// ---- what agent clients send and expect ------------------------------------------------------------------------------
+// stream_options.include_usage: the stream ends with a chunk of usage (no choices) before [DONE].
+static void test_usage(void) {
+    static const uint32_t sc[] = {'O' + 1, 'K' + 1};
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":true,"
+            "\"stream_options\":{\"include_usage\":true}}", sc, 2);
+    const char* fin = strstr(wire, "\"finish_reason\":\"stop\"");
+    const char* use = strstr(wire, "data: {\"id\":\"chatcmpl-");
+    while (use && strstr(use + 1, "data: {\"id\":\"chatcmpl-")) use = strstr(use + 1, "data: {\"id\":\"chatcmpl-");
+    const char* done = strstr(wire, "data: [DONE]\n\n");
+    CHECK(fin && use && done && fin < use && use < done);   // (the last chunk)
+    CHECK(use && strstr(use, "\"choices\":[],\"usage\":{\"prompt_tokens\":27,\"completion_tokens\":2,"
+                             "\"total_tokens\":29}}\n\ndata: [DONE]") == strstr(use, "\"choices\""));
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":true}", sc, 2);
+    CHECK(strstr(wire, "usage") == NULL);   // (not asked for)
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":true,\"think\":true,"
+            "\"stream_options\":{\"include_usage\":true}}", think_sc, THINK_SC_LEN);
+    CHECK(strstr(wire, "\"choices\":[],\"usage\":{\"prompt_tokens\":23,\"completion_tokens\":4,\"total_tokens\":27,"
+                       "\"completion_tokens_details\":{\"reasoning_tokens\":2}}}") != NULL);
+}
+
+// Without max_tokens the answer may use the rest of the context window: a long reply is not cut at 512 tokens.
+static void test_default_max(void) {
+    static uint32_t sc[700];
+    for (int i = 0; i < 700; i++) sc[i] = 'a' + 1 + i % 26;
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", sc, 700);
+    CHECK(strstr(wire, "\"finish_reason\":\"stop\"") && strstr(wire, "\"completion_tokens\":700,"));
+    eng.ctx_limit = 100;   // up to the end of the context: 27 tokens of prompt, 71 of answer (and 2 to spare)
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", sc, 700);
+    CHECK(strstr(wire, "\"finish_reason\":\"length\"") && strstr(wire, "\"completion_tokens\":71,"));
+    // a prompt that leaves no room says so, with its size
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"0123456789012345678901234567890123456789012345678901234567"
+            "89012345678901234567890123456789\"}]}", sc, 700);
+    CHECK(strstr(wire, "context_length_exceeded") != NULL);
+    CHECK(!strcmp(error_message(), "This model's maximum context length is 100 tokens. However, your messages take "
+                                   "115 tokens. Please reduce the length of the messages."));
+    eng.ctx_limit = 4096;
+
+    // reasoning starts only with API_ANSWER_MIN left for the answer
+    think_on = 1;
+    eng.ctx_limit = 700;
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", think_sc, THINK_SC_LEN);
+    CHECK(prompt_len_seen == 27 && strstr(wire, "reasoning") == NULL);
+    // with room for it: and when it ends early, the answer has what it did not use (625 tokens without that)
+    static uint32_t long_think[705];
+    memcpy(long_think, think_sc, 5 * sizeof(uint32_t));   // "ab", </think>, the blank line
+    for (int i = 5; i < 705; i++) long_think[i] = 'z' + 1;
+    eng.ctx_limit = 900;
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", long_think, 705);
+    CHECK(prompt_len_seen == 23 && strstr(wire, "\"reasoning_content\":\"ab\"") != NULL);
+    CHECK(strstr(wire, "\"finish_reason\":\"stop\"") && strstr(wire, "\"completion_tokens\":702,"));
+    eng.ctx_limit = 4096;
+    think_on = 0;
+}
+
+// Tools and messages that do not fit: the numbers, and the tools' share, without the words "tool" or "function".
+static void test_tools_too_long(void) {
+    int cleared = msgs_cleared;
+    eng.ctx_limit = 400;
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"Weather?\"}]," WEATHER_TOOL ",\"max_tokens\":10}", NULL, 0);
+    CHECK(strncmp(wire, "HTTP/1.1 400 Bad Request", 23) == 0 && strstr(wire, "\"code\":\"context_length_exceeded\""));
+    const char* m = error_message();
+    CHECK(starts(m, "This model's maximum context length is 400 tokens. However, you requested "));
+    CHECK(strstr(m, " in the messages, 10 in the completion). The schema sent with the request takes ") != NULL);
+    CHECK(!has_word(m, "tool") && !has_word(m, "function"));
+    eng.ctx_limit = 4096;
+    CHECK(msgs_cleared == cleared && engine_calls == 0);
+}
+
+// What an agent client sends: a developer message, an assistant turn of calls without content, the results, tools
+// and tool_choice "auto", streamed with usage.
+static void test_agent_history(void) {
+    int k = reply_of("Done: 18 C.");
+    run_job("{\"model\":\"Qwen3.5-9B\",\"stream\":true,\"stream_options\":{\"include_usage\":true},\"messages\":["
+            "{\"role\":\"developer\",\"content\":\"Be brief.\"},{\"role\":\"user\",\"content\":\"Weather?\"},"
+            "{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_9\",\"type\":\"function\",\"function\":"
+            "{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Lima\\\",\\\"days\\\":2}\"}}]},"
+            "{\"role\":\"tool\",\"tool_call_id\":\"call_9\",\"content\":\"18 C\"}]," WEATHER_TOOL ",\"tool_choice\":\"auto\"}",
+            reply_sc, k);
+    const char* p = prompt_text(prompt_len_seen);
+    CHECK(starts(p, "<S:0>system\n# Tools\n\n"));   // (the developer message goes with the tools)
+    CHECK(strstr(p, "</IMPORTANT>\n\nBe brief.<S:1>\n<S:0>user\nWeather?<S:1>\n<S:0>assistant\n<S:2>\n\n<S:3>\n\n"
+                    "<S:13>\n<function=get_weather>\n<parameter=city>\nLima\n</parameter>\n<parameter=days>\n2\n"
+                    "</parameter>\n</function>\n<S:14><S:1>\n<S:0>user\n<S:21>\n18 C\n<S:22><S:1>\n") != NULL);
+    CHECK(strstr(wire, "\"delta\":{\"content\":\"D\"}") != NULL && strstr(wire, "\"finish_reason\":\"stop\""));
+    CHECK(strstr(wire, "\"choices\":[],\"usage\":{\"prompt_tokens\":") != NULL && strstr(wire, "data: [DONE]"));
+
+    // developer without tools: a system turn of its own
+    static const uint32_t plain[] = {'O' + 1, 'K' + 1};
+    run_job("{\"messages\":[{\"role\":\"developer\",\"content\":\"Be brief.\"},{\"role\":\"user\",\"content\":\"Hi\"}]}",
+            plain, 2);
+    CHECK(starts(prompt_text(prompt_len_seen), "<S:0>system\nBe brief.<S:1>\n<S:0>user\nHi<S:1>\n"));
+
+    // calls an assistant message cannot have: said apart from a malformed message
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"},{\"role\":\"assistant\",\"tool_calls\":"
+            "[{\"type\":\"function\",\"function\":{}}]},{\"role\":\"tool\",\"content\":\"x\"}]," WEATHER_TOOL "}", plain, 2);
+    CHECK(strncmp(wire, "HTTP/1.1 400 Bad Request", 23) == 0 && strstr(wire, "invalid_body"));
+    CHECK(strstr(error_message(), "An assistant message's 'tool_calls' are malformed") != NULL);
+}
+
+// tool_choice "required": the reply begins with a call, and the model writes which function; parallel_tool_calls
+// false keeps only the first of several calls.
+static void test_tool_choice_more(void) {
+    int k = reply_of("get_weather>\n<parameter=city>\nLima\n</parameter>\n</function>\n#");
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}]," WEATHER_TOOL ",\"tool_choice\":\"required\","
+            "\"stream\":true}", reply_sc, k);
+    CHECK(strstr(prompt_text(prompt_len_seen), "<S:0>assistant\n<S:2>\n\n<S:3>\n\n<S:13>\n<function=") != NULL);
+    CHECK(strstr(wire, "\"delta\":{\"content\"") == NULL);   // (nothing of the call as text)
+    CHECK(strstr(wire, "\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Lima\\\"}\"}") != NULL);
+    CHECK(strstr(wire, "\"finish_reason\":\"tool_calls\"") != NULL);
+
+    k = reply_of(WEATHER_CALL "\n" WEATHER_CALL);
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}]," WEATHER_TOOL "}", reply_sc, k);
+    CHECK(strstr(wire, call_id(2)) != NULL);
+    run_job("{\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}]," WEATHER_TOOL ",\"parallel_tool_calls\":false}",
+            reply_sc, k);
+    CHECK(strstr(wire, call_id(1)) != NULL && strstr(wire, call_id(2)) == NULL);
+}
+
+// A big agent request: 100 tools, a long conversation and more JSON values than the first pool holds. The reply's
+// call is read with the schemas (an integer argument as a number), with the request read again at the end.
+static char agent_big[80000];
+static void test_big_agent_request(void) {
+    size_t n = (size_t)sprintf(agent_big, "{\"meta\":[0");
+    for (int i = 0; i < 5000; i++) n += (size_t)sprintf(agent_big + n, ",0");
+    n += (size_t)sprintf(agent_big + n, "],\"messages\":[");
+    for (int i = 0; i < 200; i++)
+        n += (size_t)sprintf(agent_big + n, "%s{\"role\":\"%s\",\"content\":\"m\"}", i ? "," : "", i % 2 ? "assistant" : "user");
+    n += (size_t)sprintf(agent_big + n, ",{\"role\":\"user\",\"content\":\"go\"}],\"tools\":[");
+    for (int i = 0; i < 100; i++)
+        n += (size_t)sprintf(agent_big + n, "%s{\"type\":\"function\",\"function\":{\"name\":\"t%d\"%s}}", i ? "," : "", i,
+                             i == 57 ? ",\"parameters\":{\"properties\":{\"n\":{\"type\":\"integer\"}}}" : "");
+    sprintf(agent_big + n, "]}");
+    int k = reply_of("@\n<function=t57>\n<parameter=n>\n42\n</parameter>\n</function>\n#");
+    eng.ctx_limit = API_IDS;
+    run_job(agent_big, reply_sc, k);
+    eng.ctx_limit = 4096;
+    CHECK(strncmp(wire, "HTTP/1.1 200 OK", 15) == 0);
+    CHECK(strstr(wire, "\"name\":\"t57\",\"arguments\":\"{\\\"n\\\":42}\"") != NULL);
+    CHECK(prompt_len_seen > 5000 && strstr(wire, "\"finish_reason\":\"tool_calls\""));
 }
 
 // ---- the kept state of the prompt's beginning -------------------------------------------------------------------------
@@ -689,8 +900,15 @@ int main(void) {
         test_tools();
         test_tool_results();
         test_tool_choice();
+        test_usage();
+        test_default_max();
+        test_tools_too_long();
+        test_agent_history();
+        test_tool_choice_more();
+        test_big_agent_request();
         test_kept_state();
         CHECK(pos_errors == 0);           // every token went in at the position after the one before
+        CHECK(ctx_errors == 0);           // and none past the context window
         CHECK(chat_begun == chat_ended);   // every request that took the screen gave it back
         CHECK(chat_replies <= chat_begun);
     }

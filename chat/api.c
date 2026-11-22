@@ -22,7 +22,7 @@
 
 #define API_ASSETS "/app0/assets"
 #define API_KEY_FILE "/data/garlic_api_key.txt"   // optional: if it holds a key, requests need "Authorization: Bearer <key>"
-#define API_MAX_BODY (1 << 20)
+#define API_DRAIN (16 << 20)      // the most of a refused body that is read and dropped (see drain)
 
 // Socket constants that the SDK's headers do not name (the BSD values the console's libSceNet uses)
 #define API_SOL_SOCKET 0xffff
@@ -52,6 +52,7 @@ static int jobs;                // chat jobs queued or being answered (api_done 
 static int answering;           // the main loop is answering one of them (api_take to api_done)
 static volatile int console_busy;   // the console itself is using the model (api_console_busy)
 static char model_name[64] = "Garlic";
+static int context_length = 16384;
 static char* key;               // the API key, or NULL
 static OrbisPthread api_th;
 static int ready, have_thread;  // the network library, the mutex and the key are set up (once); the thread exists
@@ -65,6 +66,8 @@ void api_set_model(const char* name) {
 }
 
 const char* api_model(void) { return model_name; }
+
+void api_set_context(int tokens) { context_length = tokens; }
 
 int api_send(int fd, const char* p, size_t n) {
     while (n) {
@@ -148,9 +151,13 @@ static int authorized(const HttpRequest* r) {
     return strncmp(r->auth, "Bearer ", 7) == 0 && strlen(r->auth + 7) == k && !memcmp(r->auth + 7, key, k);
 }
 
+// Reads one request. Returns 1 when it is whole (its body points into *buf_out, to free once the reply is written),
+// 0 if the client stopped sending before its end, -1 if it is malformed, or -2 if its body is over API_MAX_BODY.
+// *len_out: the bytes read.
 static int read_request(int fd, char** buf_out, size_t* len_out, HttpRequest* req) {
     size_t cap = 16384, len = 0;
     char* buf = malloc(cap);
+    *len_out = 0;
     if (!buf) return -1;
     int r = 0;
     for (;;) {
@@ -167,24 +174,37 @@ static int read_request(int fd, char** buf_out, size_t* len_out, HttpRequest* re
         r = api_http_parse(buf, len, req);
         if (r != 0) break;
     }
+    *len_out = len;
     if (r == 1) {   // the body points into buf: keep the buffer until the reply is written
         *buf_out = buf;
-        *len_out = len;
         return 1;
     }
     free(buf);
-    return r == 0 ? 0 : -1;
+    return r;
+}
+
+// Reads and drops the rest of a refused body (up to API_DRAIN bytes), so that the client reads the answer: a socket
+// closed with bytes it has not read is reset, and the answer may be lost with it.
+static void drain(int fd, long left) {
+    char tmp[4096];
+    if (left > API_DRAIN) left = API_DRAIN;
+    while (left > 0) {
+        int n = sceNetRecv(fd, tmp, left < (long)sizeof(tmp) ? (size_t)left : sizeof(tmp), 0);
+        if (n <= 0) break;
+        left -= n;
+    }
 }
 
 // Queues a chat request for the main loop. Returns 1 if the main loop now owns fd (api_done closes it), or 0 if the
 // request was answered here (malformed, out of memory, or another one is being answered) and fd is still ours.
 static int serve_chat(int fd, HttpRequest* req) {
-    JNode* pool = malloc(sizeof(JNode) * API_MAX_NODES);
     ChatRequest cr;
     const char* err = NULL;
-    if (!pool || api_chat_parse(req->body, req->body_len, pool, API_MAX_NODES, &cr, &err)) {
-        free(pool);
-        reply_json_error(fd, 400, "Bad Request", err ? err : "Out of memory.", "invalid_request_error", "invalid_body");
+    JNode* pool = api_chat_parse_pool(req->body, req->body_len, &cr, &err);   // (read only to check it)
+    if (!pool) {
+        say("api: request refused (%zu bytes): %s", req->body_len, err ? err : "out of memory");
+        if (err) reply_json_error(fd, 400, "Bad Request", err, "invalid_request_error", "invalid_body");
+        else reply_json_error(fd, 500, "Internal Server Error", "Out of memory.", "server_error", NULL);
         return 0;
     }
     free(pool);
@@ -234,37 +254,64 @@ static int handle(int fd) {
     size_t len = 0;
     HttpRequest req;
     int r = read_request(fd, &buf, &len, &req);
-    if (r != 1) {   // malformed, too big, or cut off before the end
+    if (r == -2) {
+        say("api: request refused: a body of %ld bytes, over %d", req.content_length, API_MAX_BODY);
+        reply_json_error(fd, 413, "Payload Too Large", "The request body is larger than 1 MiB, the most the API reads.",
+                         "invalid_request_error", "request_too_large");
+        drain(fd, req.content_length - (long)(len - req.head_len));
+        return 0;
+    }
+    if (r == 0 && len == 0) return 0;   // (a connection that sent nothing: a browser's spare one, a port check)
+    if (r != 1) {   // malformed, or cut off before the end
+        say("api: %s request (%zu bytes read)", r ? "malformed" : "incomplete", len);
         reply_json_error(fd, 400, "Bad Request", "Malformed or incomplete request.", "invalid_request_error", NULL);
         return 0;
     }
     if (!strcmp(req.method, "OPTIONS")) {
+        // A browser asks first. "*" lets it send any header an OpenAI client library adds; Authorization must be named
+        // (the wildcard does not cover it). Private-Network: a page on the internet may reach the console's address.
         const char* h = "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\n"
-                        "Access-Control-Allow-Headers: Authorization, Content-Type\r\n"
-                        "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                        "Access-Control-Allow-Headers: Authorization, Content-Type, *\r\n"
+                        "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+                        "Access-Control-Allow-Private-Network: true\r\nAccess-Control-Max-Age: 86400\r\n"
+                        "Content-Length: 0\r\nConnection: close\r\n\r\n";
         api_send(fd, h, strlen(h));
     } else if (!strcmp(req.method, "GET") && !strcmp(req.path, "/health")) {   // (no key needed, as documented)
         reply_health(fd);
+    } else if (!strcmp(req.method, "GET") && (!strcmp(req.path, "/openapi.json") || !strcmp(req.path, "/"))) {
+        size_t n = 0;   // (no key needed either: the description is the same on every console)
+        uint8_t* spec = read_all(API_ASSETS "/openapi.json", &n);
+        if (spec) reply(fd, 200, "OK", "application/json", (const char*)spec, n);
+        else reply_json_error(fd, 404, "Not Found", "The API description is missing.", "invalid_request_error", NULL);
+        free(spec);
     } else if (!authorized(&req)) {
+        say("api: request refused: %s API key (%s %s)", req.auth[0] ? "wrong" : "no", req.method, req.path);
         reply_json_error(fd, 401, "Unauthorized", "Missing or wrong API key.", "invalid_request_error",
                          "invalid_api_key");
     } else if (!strcmp(req.method, "GET") && (!strcmp(req.path, "/v1/models") || !strcmp(req.path, "/models"))) {
         Sb s;
         sb_init(&s);
-        api_json_models(&s, model_name, 0);
+        api_json_models(&s, model_name, 0, context_length);
         reply(fd, 200, "OK", "application/json", s.p, s.n);
         sb_free(&s);
-    } else if (!strcmp(req.method, "GET") && (!strcmp(req.path, "/openapi.json") || !strcmp(req.path, "/"))) {
-        size_t n = 0;
-        uint8_t* spec = read_all(API_ASSETS "/openapi.json", &n);
-        if (spec) reply(fd, 200, "OK", "application/json", (const char*)spec, n);
-        else reply_json_error(fd, 404, "Not Found", "The API description is missing.", "invalid_request_error", NULL);
-        free(spec);
+    } else if (!strcmp(req.method, "GET") && !strncmp(req.path, "/v1/models/", 11)) {   // (one model, by its id)
+        Sb s;
+        sb_init(&s);
+        if (!strcmp(req.path + 11, model_name)) {
+            api_json_model(&s, model_name, 0, context_length);
+            reply(fd, 200, "OK", "application/json", s.p, s.n);
+        } else {
+            api_json_error(&s, "The console runs one model; see GET /v1/models.", "invalid_request_error",
+                           "model_not_found");
+            reply(fd, 404, "Not Found", "application/json", s.p, s.n);
+        }
+        sb_free(&s);
     } else if (!strcmp(req.method, "POST") && !strcmp(req.path, "/v1/chat/completions")) {
         int queued_it = serve_chat(fd, &req);   // (the job has its own copy of the body)
         free(buf);
         return queued_it;
     } else {
+        say("api: no such endpoint: %s %s", req.method, req.path);
         reply_json_error(fd, 404, "Not Found", "No such endpoint.", "invalid_request_error", NULL);
     }
     free(buf);

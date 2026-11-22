@@ -96,6 +96,7 @@ int api_http_parse(const char* buf, size_t len, HttpRequest* req) {
     }
     if (!head) return len > 16384 ? -1 : 0;
     (void)term;
+    req->head_len = head;
     // request line: METHOD SP target SP HTTP/1.x
     const char* p = buf;
     const char* end = buf + head;
@@ -133,8 +134,9 @@ int api_http_parse(const char* buf, size_t len, HttpRequest* req) {
                 num[vlen] = 0;
                 char* ep;
                 long cl = strtol(num, &ep, 10);
-                if (*ep || cl < 0 || cl > 1 << 20) return -1;
+                if (*ep || cl < 0) return -1;
                 req->content_length = cl;
+                if (cl > API_MAX_BODY) return -2;
             } else if (ci_eq(p, colon - p, "authorization")) {
                 size_t k = vlen < sizeof(req->auth) - 1 ? vlen : sizeof(req->auth) - 1;
                 memcpy(req->auth, v, k);
@@ -143,7 +145,6 @@ int api_http_parse(const char* buf, size_t len, HttpRequest* req) {
         }
         p = eol + 1;
     }
-    req->head_len = head;
     if (len < head + (size_t)req->content_length) return 0;
     req->body = buf + head;
     req->body_len = (size_t)req->content_length;
@@ -157,6 +158,7 @@ typedef struct {
     size_t n, i;
     JNode* pool;
     int max, used, depth;
+    int full;                   // the pool ran out of nodes
 } JP;
 
 static void jp_ws(JP* P) {
@@ -164,7 +166,10 @@ static void jp_ws(JP* P) {
 }
 
 static int jp_new(JP* P) {
-    if (P->used >= P->max) return -1;
+    if (P->used >= P->max) {
+        P->full = 1;
+        return -1;
+    }
     JNode* d = &P->pool[P->used];
     memset(d, 0, sizeof(*d));
     d->first = d->next = -1;
@@ -282,12 +287,27 @@ done:
 }
 
 int json_parse(const char* s, size_t n, JNode* pool, int max) {
-    JP P = {s, n, 0, pool, max, 0, 0};
+    JP P = {s, n, 0, pool, max, 0, 0, 0};
     int root;
-    if (jp_value(&P, &root)) return -1;
+    if (jp_value(&P, &root)) return P.full ? -2 : -1;
     jp_ws(&P);
     if (P.i != n) return -1;
     return root;
+}
+
+JNode* json_parse_grow(const char* s, size_t n, int first, int* root) {
+    for (int max = first;; max *= 8) {
+        if (max > API_MAX_VALUES) max = API_MAX_VALUES;
+        JNode* pool = malloc(sizeof(JNode) * (size_t)max);
+        if (!pool) {
+            *root = -3;
+            return NULL;
+        }
+        *root = json_parse(s, n, pool, max);
+        if (*root >= 0) return pool;
+        free(pool);
+        if (*root != -2 || max == API_MAX_VALUES) return NULL;
+    }
 }
 
 int json_get(const JNode* pool, int obj, const char* key) {
@@ -506,12 +526,36 @@ static void write_tool_call(Sb* out, const ApiToolCall* c) {
 
 // ---- JSON writers -------------------------------------------------------------------------------------------------
 
-void api_json_models(Sb* out, const char* model, long long created) {
-    sb_str(out, "{\"object\":\"list\",\"data\":[{\"id\":");
+void api_json_model(Sb* out, const char* model, long long created, int context_length) {
+    sb_str(out, "{\"id\":");
     sb_json_str(out, model, strlen(model));
     sb_str(out, ",\"object\":\"model\",\"created\":");
     sb_int(out, created);
-    sb_str(out, ",\"owned_by\":\"garlic-llm\"}]}");
+    sb_str(out, ",\"owned_by\":\"garlic-llm\",\"context_length\":");
+    sb_int(out, context_length);
+    sb_str(out, "}");
+}
+
+void api_json_models(Sb* out, const char* model, long long created, int context_length) {
+    sb_str(out, "{\"object\":\"list\",\"data\":[");
+    api_json_model(out, model, created, context_length);
+    sb_str(out, "]}");
+}
+
+// "usage":{...} (completion_tokens counts the reasoning too; its own count only when there was reasoning)
+static void write_usage(Sb* out, int prompt_tokens, int completion_tokens, int reasoning_tokens) {
+    sb_str(out, "\"usage\":{\"prompt_tokens\":");
+    sb_int(out, prompt_tokens);
+    sb_str(out, ",\"completion_tokens\":");
+    sb_int(out, completion_tokens);
+    sb_str(out, ",\"total_tokens\":");
+    sb_int(out, prompt_tokens + completion_tokens);
+    if (reasoning_tokens) {
+        sb_str(out, ",\"completion_tokens_details\":{\"reasoning_tokens\":");
+        sb_int(out, reasoning_tokens);
+        sb_str(out, "}");
+    }
+    sb_str(out, "}");
 }
 
 void api_json_health(Sb* out, int busy, int waiting) {
@@ -549,18 +593,9 @@ void api_json_completion(Sb* out, const char* id, const char* model, long long c
     }
     sb_str(out, "},\"finish_reason\":");
     sb_json_str(out, finish, strlen(finish));
-    sb_str(out, "}],\"usage\":{\"prompt_tokens\":");
-    sb_int(out, prompt_tokens);
-    sb_str(out, ",\"completion_tokens\":");
-    sb_int(out, completion_tokens);
-    sb_str(out, ",\"total_tokens\":");
-    sb_int(out, prompt_tokens + completion_tokens);
-    if (reasoning_tokens) {
-        sb_str(out, ",\"completion_tokens_details\":{\"reasoning_tokens\":");
-        sb_int(out, reasoning_tokens);
-        sb_str(out, "}");
-    }
-    sb_str(out, "}}");
+    sb_str(out, "}],");
+    write_usage(out, prompt_tokens, completion_tokens, reasoning_tokens);
+    sb_str(out, "}");
 }
 
 void api_json_chunk(Sb* out, const char* id, const char* model, long long created, const char* role,
@@ -610,6 +645,19 @@ void api_json_chunk_tool(Sb* out, const char* id, const char* model, long long c
     sb_str(out, "}]},\"finish_reason\":null}]}");
 }
 
+void api_json_chunk_usage(Sb* out, const char* id, const char* model, long long created, int prompt_tokens,
+                          int completion_tokens, int reasoning_tokens) {
+    sb_str(out, "{\"id\":");
+    sb_json_str(out, id, strlen(id));
+    sb_str(out, ",\"object\":\"chat.completion.chunk\",\"created\":");
+    sb_int(out, created);
+    sb_str(out, ",\"model\":");
+    sb_json_str(out, model, strlen(model));
+    sb_str(out, ",\"choices\":[],");
+    write_usage(out, prompt_tokens, completion_tokens, reasoning_tokens);
+    sb_str(out, "}");
+}
+
 void api_json_error(Sb* out, const char* message, const char* type, const char* code) {
     sb_str(out, "{\"error\":{\"message\":");
     sb_json_str(out, message, strlen(message));
@@ -622,6 +670,9 @@ void api_json_error(Sb* out, const char* message, const char* type, const char* 
 }
 
 // ---- chat request -------------------------------------------------------------------------------------------------
+
+#define API_STR(x) #x
+#define API_XSTR(x) API_STR(x)
 
 // A tool's function object: {"type":"function","function":{...}} as OpenAI sends it, or the function itself.
 static int tool_func_node(const JNode* pool, int tool) {
@@ -673,15 +724,27 @@ static int parse_tools(const JNode* pool, ChatRequest* req, const char** err) {
     }
     int nm = pool[tc].type == J_OBJ ? named_function(pool, tc) : -1;
     if (nm < 0 || req->n_tools == 0) {
-        *err = "Invalid 'tool_choice'.";
+        *err = req->n_tools == 0 && nm >= 0 ? "'tool_choice' needs 'tools'." : "Invalid 'tool_choice'.";
         return -1;
     }
     Sb s;
     sb_init(&s);
     json_str_sb(pool, nm, &s);
-    size_t k = s.n < sizeof(req->tool_name) - 1 ? s.n : sizeof(req->tool_name) - 1;
-    if (s.p) memcpy(req->tool_name, s.p, k);
-    req->tool_name[k] = 0;
+    int found = 0;   // (the function must be one of the tools, as OpenAI requires)
+    for (int t = pool[req->tools].first; t >= 0 && !found && s.p; t = pool[t].next) {
+        Sb name;
+        sb_init(&name);
+        json_str_sb(pool, named_function(pool, t), &name);
+        found = name.n == s.n && name.p && !memcmp(name.p, s.p, s.n);
+        sb_free(&name);
+    }
+    if (!found || s.n >= sizeof(req->tool_name)) {
+        sb_free(&s);
+        *err = "'tool_choice' names a function that is not in 'tools'.";
+        return -1;
+    }
+    memcpy(req->tool_name, s.p, s.n);
+    req->tool_name[s.n] = 0;
     sb_free(&s);
     req->tool_choice = TOOL_NAMED;
     return 0;
@@ -690,11 +753,20 @@ static int parse_tools(const JNode* pool, ChatRequest* req, const char** err) {
 int api_chat_parse(const char* body, size_t len, JNode* pool, int max, ChatRequest* req, const char** err) {
     memset(req, 0, sizeof(*req));
     req->temperature = 0.7;
-    req->max_tokens = 512;
+    req->parallel_tool_calls = 1;
     req->messages = -1;
     req->tools = -1;
     req->root = json_parse(body, len, pool, max);
-    if (req->root < 0 || pool[req->root].type != J_OBJ) {
+    if (req->root == -2) {
+        *err = "The request has more than " API_XSTR(API_MAX_VALUES) " JSON values, the most the API reads.";
+        return -2;
+    }
+    if (req->root < 0) {
+        *err = len ? "The body is not valid JSON."
+                   : "The request has no body. Send the JSON with a Content-Length header.";
+        return -1;
+    }
+    if (pool[req->root].type != J_OBJ) {
         *err = "The body must be a JSON object.";
         return -1;
     }
@@ -721,7 +793,7 @@ int api_chat_parse(const char* body, size_t len, JNode* pool, int max, ChatReque
         req->temperature = pool[t].num;
     }
     int mt = json_get(pool, req->root, "max_completion_tokens");
-    if (mt < 0) mt = json_get(pool, req->root, "max_tokens");
+    if (mt < 0 || pool[mt].type == J_NULL) mt = json_get(pool, req->root, "max_tokens");
     if (mt >= 0 && pool[mt].type != J_NULL) {
         if (pool[mt].type != J_NUM || pool[mt].num < 1 || pool[mt].num > 16384) {
             *err = "'max_tokens' must be a number from 1 to 16384.";
@@ -737,6 +809,11 @@ int api_chat_parse(const char* body, size_t len, JNode* pool, int max, ChatReque
         }
         req->stream = pool[s].b;
     }
+    int so = json_get(pool, req->root, "stream_options");
+    int iu = so >= 0 && pool[so].type == J_OBJ ? json_get(pool, so, "include_usage") : -1;
+    req->include_usage = iu >= 0 && pool[iu].type == J_BOOL && pool[iu].b;
+    int ptc = json_get(pool, req->root, "parallel_tool_calls");
+    if (ptc >= 0 && pool[ptc].type == J_BOOL) req->parallel_tool_calls = pool[ptc].b;
     int n = json_get(pool, req->root, "n");
     if (n >= 0 && pool[n].type == J_NUM && pool[n].num != 1) {
         *err = "Only n = 1 is supported.";
@@ -764,6 +841,21 @@ int api_chat_parse(const char* body, size_t len, JNode* pool, int max, ChatReque
         }
     }
     return 0;
+}
+
+JNode* api_chat_parse_pool(const char* body, size_t len, ChatRequest* req, const char** err) {
+    for (int max = API_MAX_NODES;; max *= 8) {
+        if (max > API_MAX_VALUES) max = API_MAX_VALUES;
+        JNode* pool = malloc(sizeof(JNode) * (size_t)max);
+        if (!pool) {
+            *err = NULL;
+            return NULL;
+        }
+        int r = api_chat_parse(body, len, pool, max, req, err);
+        if (r == 0) return pool;
+        free(pool);
+        if (r != -2 || max == API_MAX_VALUES) return NULL;
+    }
 }
 
 // ---- Qwen3.5's tool format ----------------------------------------------------------------------------------------
@@ -842,11 +934,10 @@ int api_assistant_tool_calls(const JNode* pool, int msg, Sb* out) {
             Sb dec;
             sb_init(&dec);
             json_str_sb(pool, args, &dec);
-            if (dec.p && dec.n) {
-                JNode apool[256];
-                int aroot = json_parse(dec.p, dec.n, apool, 256);
-                if (aroot >= 0 && apool[aroot].type == J_OBJ) write_tool_params(apool, aroot, out);
-            }
+            int aroot;
+            JNode* apool = dec.p && dec.n ? json_parse_grow(dec.p, dec.n, 256, &aroot) : NULL;
+            if (apool && apool[aroot].type == J_OBJ) write_tool_params(apool, aroot, out);
+            free(apool);
             sb_free(&dec);
         }
         sb_str(out, "</function>\n</tool_call>");
@@ -943,13 +1034,14 @@ static int parse_xml_functions(const JNode* pool, const ChatRequest* req, const 
             int non_str = param_is_non_string(pool, req, tc->name, pn_start, (size_t)(pn_end - pn_start));
             int wrote_raw = 0;
             if (vlen > 0 && (non_str || val[0] == '{' || val[0] == '[')) {
-                JNode vpool[256];
-                int vroot = json_parse(val, vlen, vpool, 256);
-                if (vroot >= 0 && (non_str ? vpool[vroot].type != J_STR
-                                           : (vpool[vroot].type == J_OBJ || vpool[vroot].type == J_ARR))) {
+                int vroot;
+                JNode* vpool = json_parse_grow(val, vlen, 256, &vroot);
+                if (vpool && (non_str ? vpool[vroot].type != J_STR
+                                      : (vpool[vroot].type == J_OBJ || vpool[vroot].type == J_ARR))) {
                     json_write(vpool, vroot, &tc->arguments);
                     wrote_raw = 1;
                 }
+                free(vpool);
             }
             if (!wrote_raw) sb_json_str(&tc->arguments, val, vlen);
         }
@@ -965,12 +1057,14 @@ static int parse_json_function(const char* s, const char* end, ApiToolCall* call
     while (s < end && (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r')) s++;
     while (end > s && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\n' || end[-1] == '\r')) end--;
     if (s >= end || *s != '{') return count;
-    JNode jpool[256];
-    int root = json_parse(s, (size_t)(end - s), jpool, 256);
-    if (root < 0 || jpool[root].type != J_OBJ) return count;
-    int fn = tool_func_node(jpool, root);
-    int nm = named_function(jpool, root);
-    if (nm < 0) return count;
+    int root;
+    JNode* jpool = json_parse_grow(s, (size_t)(end - s), 256, &root);
+    int fn = jpool && jpool[root].type == J_OBJ ? tool_func_node(jpool, root) : -1;
+    int nm = fn >= 0 ? named_function(jpool, root) : -1;
+    if (nm < 0) {
+        free(jpool);
+        return count;
+    }
 
     ApiToolCall* tc = &calls[count];
     memset(tc, 0, sizeof(*tc));
@@ -988,6 +1082,7 @@ static int parse_json_function(const char* s, const char* end, ApiToolCall* call
     if (args >= 0 && jpool[args].type == J_STR) json_str_sb(jpool, args, &tc->arguments);
     else if (args >= 0 && jpool[args].type == J_OBJ) json_write(jpool, args, &tc->arguments);
     else sb_str(&tc->arguments, "{}");
+    free(jpool);
     return count + 1;
 }
 

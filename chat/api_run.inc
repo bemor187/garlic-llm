@@ -12,10 +12,15 @@
 // to think_cap tokens, then answers; if it has not closed </think> by then, Qwen's closing sentence and </think> are
 // fed. The reasoning goes to the client apart from the answer (reasoning_content), and max_tokens counts the answer
 // only. Whether a reply reasons: the last user message's /think or /no_think, else the request's own field
-// (api_chat_parse), else the console's setting (R3).
+// (api_chat_parse), else the console's setting (R3). Without max_tokens the answer may use the rest of the context
+// window (an agent's reply may be a long tool call), and reasoning starts only with API_ANSWER_MIN left for it.
 //
 // Tools: the model writes <tool_call> blocks (api_proto.c reads them into OpenAI's tool_calls). Streamed text stops
-// at the first <tool_call>; the calls go out whole at the end.
+// at the first <tool_call>; the calls go out whole at the end. The tools' JSON is part of the prompt, so it counts
+// toward the context window and prompt_tokens like the messages.
+//
+// The request's JSON pool (up to 4 MiB for a big agent request) is freed once the prompt is written; the reply's
+// tool calls are read with the request read again, at the end.
 //
 // The prompt's beginning is kept between requests (a client sends the whole conversation every time): after the
 // prompt is read up to its last "<|im_start|>assistant\n", the Gated DeltaNet state there is copied into the
@@ -27,7 +32,9 @@
 #define API_IDS 16384             // tokens a job's prompt may have: the longest context of the app
 #define API_TAIL 128              // kept free for the assistant's turn after the messages (and a named tool's start)
 #define API_THINK_MIN 64          // the least reasoning worth starting; with less room the reply comes without
+#define API_ANSWER_MIN 512        // without max_tokens: the room reasoning leaves for the answer at least
 #define API_CHUNK 256             // tokens read per engine call: a client that leaves or Circle stops a long prompt
+#define API_LOOK 32               // tokens between two looks at a connection that nothing is sent to meanwhile
 static uint32_t api_ids[API_IDS];        // the prompt of a job
 static uint32_t api_snap_ids[API_IDS];   // the ids the saved state stands for (api_snap_n of them, main.c)
 
@@ -56,6 +63,12 @@ static size_t api_tool_prefix(const char* p, size_t n) {
     size_t start = n > sizeof(tag) - 1 ? n - (sizeof(tag) - 1) : 0;
     for (size_t i = start; i < n; i++)
         if (p[i] == '<' && !memcmp(p + i, tag, n - i)) return i;
+    return n;
+}
+
+// The first n bytes of p without the spaces and line breaks at their end.
+static size_t api_trim_end(const char* p, size_t n) {
+    while (n && (p[n - 1] == ' ' || p[n - 1] == '\n' || p[n - 1] == '\r' || p[n - 1] == '\t')) n--;
     return n;
 }
 
@@ -136,8 +149,9 @@ static void api_role(char* role) {
 // The messages of the prompt, as Qwen3.5's chat template writes them (see the top of this file). The last user
 // message's reasoning switch is taken out of its text (into *think_switch: 1, 0 or -1, see api_think_switch).
 // *tool_turn is 1 if the conversation ends with tool results. Returns the number of ids, -1 if a message is
-// malformed, or -2 if the messages do not fit API_IDS. The limit counts tokens, not bytes: a long conversation may
-// use the whole context. (Every token stands for one byte or more, so the turn after the messages fits API_TAIL.)
+// malformed, -3 if an assistant message's tool_calls are, or -2 if the messages do not fit API_IDS. The limit counts
+// tokens, not bytes: a long conversation may use the whole context. (Every token stands for one byte or more, so the
+// turn after the messages fits API_TAIL.)
 static int api_prompt(const JNode* pool, const ChatRequest* cr, int* think_switch, int* tool_turn) {
     const int cap = API_IDS - API_TAIL;   // where the messages must end
     int has_tools = cr->n_tools > 0 && cr->tool_choice != TOOL_NONE;
@@ -202,7 +216,7 @@ static int api_prompt(const JNode* pool, const ChatRequest* cr, int* think_switc
             sb_free(&content);
             sb_free(&calls);
             sb_free(&reasoning);
-            return -1;
+            return ok && n_calls < 0 ? -3 : -1;
         }
         api_trim(&content);
         if (assistant) {   // its reasoning: the message's reasoning_content, else what its text holds before </think>
@@ -353,6 +367,49 @@ static void api_error(int fd, const char* status_line, const char* message, cons
     sb_free(&s);
 }
 
+// The tokens of the tool block alone (api_system_tools without the request's own system text), written into
+// api_ids: only for the answer to a request that is refused (its prompt is not needed any more). -1 if it fills them.
+static int api_tools_tokens(const JNode* pool, const ChatRequest* cr) {
+    Sb sys;
+    sb_init(&sys);
+    api_system_tools(pool, cr, "", &sys);
+    int n = sys.p && !sys.oom ? api_encode_text(api_ids, 0, API_IDS, sys.p) : -1;
+    sb_free(&sys);
+    return n >= API_IDS ? -1 : n;
+}
+
+// The answer to a request that does not fit the context window, worded as OpenAI's (clients read the numbers in it):
+// prompt is the messages' tokens (-1: more than API_IDS - API_TAIL), completion the max_tokens asked for (0: none).
+// It never says "tool" or "function": some clients take a 400 that does to mean that the server cannot call tools,
+// and stop sending them. The tools are "the schemas sent with the request".
+static void api_too_long(int fd, const JNode* pool, const ChatRequest* cr, int prompt, int completion) {
+    char msg[512];
+    int window = (int)eng.ctx_limit, k;
+    if (prompt < 0)
+        k = snprintf(msg, sizeof(msg), "This model's maximum context length is %d tokens. However, your messages take "
+                     "more than %d tokens.", window, API_IDS - API_TAIL);
+    else if (!completion)
+        k = snprintf(msg, sizeof(msg), "This model's maximum context length is %d tokens. However, your messages take "
+                     "%d tokens.", window, prompt);
+    else
+        k = snprintf(msg, sizeof(msg), "This model's maximum context length is %d tokens. However, you requested %d "
+                     "tokens (%d in the messages, %d in the completion).", window, prompt + completion, prompt,
+                     completion);
+    if (cr->n_tools > 0 && cr->tool_choice != TOOL_NONE && k > 0 && k < (int)sizeof(msg)) {
+        int t = api_tools_tokens(pool, cr);
+        char what[48];
+        if (cr->n_tools == 1) snprintf(what, sizeof(what), "The schema sent with the request takes");
+        else snprintf(what, sizeof(what), "The %d schemas sent with the request take", cr->n_tools);
+        if (t < 0) k += snprintf(msg + k, sizeof(msg) - k, " %s more than %d of them.", what, API_IDS - 1);
+        else k += snprintf(msg + k, sizeof(msg) - k, " %s %d of them.", what, t);
+    }
+    if (k > 0 && k < (int)sizeof(msg))
+        snprintf(msg + k, sizeof(msg) - k, completion ? " Please reduce the length of the messages or completion."
+                                                      : " Please reduce the length of the messages.");
+    say("api: request refused: %s", msg);
+    api_error(fd, "HTTP/1.1 400 Bad Request", msg, "invalid_request_error", "context_length_exceeded");
+}
+
 static int api_is_blank(const uint8_t* p, int n) {
     for (int i = 0; i < n; i++)
         if (p[i] != '\n' && p[i] != '\r' && p[i] != ' ') return 0;
@@ -365,37 +422,41 @@ static void api_job(ApiJob* job) {
         say("api: the client of a waiting request left; nothing to answer");
         return;
     }
-    JNode* pool = malloc(sizeof(JNode) * API_MAX_NODES);
     ChatRequest cr;
     const char* err = NULL;
-    if (!pool || api_chat_parse(job->body, job->body_len, pool, API_MAX_NODES, &cr, &err)) {
-        free(pool);
-        api_error(job->fd, "HTTP/1.1 400 Bad Request", err ? err : "Out of memory.", "invalid_request_error",
-                  "invalid_body");
+    JNode* pool = api_chat_parse_pool(job->body, job->body_len, &cr, &err);
+    if (!pool) {
+        say("api: request refused: %s", err ? err : "out of memory");
+        if (err) api_error(job->fd, "HTTP/1.1 400 Bad Request", err, "invalid_request_error", "invalid_body");
+        else api_error(job->fd, "HTTP/1.1 500 Internal Server Error", "Out of memory.", "server_error", NULL);
         return;
     }
     int think_switch, tool_turn;
     int n = api_prompt(pool, &cr, &think_switch, &tool_turn);
-    if (n == -1) {
+    if (n == -1 || n == -3) {
         free(pool);
-        api_error(job->fd, "HTTP/1.1 400 Bad Request", "A message is malformed: it needs a 'role', and 'content' must "
-                  "be a string or an array of parts.", "invalid_request_error", "invalid_body");
+        const char* why = n == -1 ? "A message is malformed: it needs a 'role', and 'content' must be a string or an "
+                                    "array of parts."
+                                  : "An assistant message's 'tool_calls' are malformed: each needs a function with a "
+                                    "'name'.";
+        say("api: request refused: %s", why);
+        api_error(job->fd, "HTTP/1.1 400 Bad Request", why, "invalid_request_error", "invalid_body");
         return;
     }
     if (n < 0) {
+        api_too_long(job->fd, pool, &cr, -1, cr.max_tokens);
         free(pool);
-        api_error(job->fd, "HTTP/1.1 400 Bad Request", "The messages do not fit the context window.",
-                  "invalid_request_error", "context_length_exceeded");
         return;
     }
     int has_tools = cr.n_tools > 0 && cr.tool_choice != TOOL_NONE;
     int forced_call = has_tools && (cr.tool_choice == TOOL_REQUIRED || cr.tool_choice == TOOL_NAMED);
+    int auto_max = !cr.max_tokens;   // no max_tokens: the answer may use the rest of the context window
     // Reasoning, when asked for and when the context has room for it besides the answer and the closing sentence
     // (not when tool_choice makes the reply begin with a call).
     int want = think_switch >= 0 ? think_switch : cr.think >= 0 ? cr.think : think_on;
     int think_budget = 0;
     if (want && eng.qwen35 && !forced_call) {
-        think_budget = (int)eng.ctx_limit - (n + API_TAIL) - cr.max_tokens - 64;
+        think_budget = (int)eng.ctx_limit - (n + API_TAIL) - (auto_max ? API_ANSWER_MIN : cr.max_tokens) - 64;
         if (think_budget > think_cap) think_budget = think_cap;
         if (think_budget < API_THINK_MIN) think_budget = 0;
     }
@@ -403,13 +464,15 @@ static void api_job(ApiJob* job) {
     Sb text;   // the reply (all of it), beginning with the call tool_choice asked for
     sb_init(&text);
     n = api_turn(n, think, &cr, &text, &head);
-    if (n + cr.max_tokens + 2 > (int)eng.ctx_limit) {
+    if (auto_max) cr.max_tokens = (int)eng.ctx_limit - n - 2 - (think ? think_budget + 64 : 0);
+    if (cr.max_tokens < 1 || n + cr.max_tokens + 2 > (int)eng.ctx_limit) {
         sb_free(&text);
+        api_too_long(job->fd, pool, &cr, n, auto_max ? 0 : cr.max_tokens);
         free(pool);
-        api_error(job->fd, "HTTP/1.1 400 Bad Request", "The messages and max_tokens do not fit the context window.",
-                  "invalid_request_error", "context_length_exceeded");
         return;
     }
+    free(pool);   // (the prompt is written: the request's pool is not needed while the model answers)
+    pool = NULL;
     // the model answers this request: the conversation on screen starts again from nothing (a request refused
     // above leaves it as it was)
     pos = 0;
@@ -420,8 +483,8 @@ static void api_job(ApiJob* job) {
     view.scroll = 0;
     api_chat_begin();   // (clears the conversation: a note says that a request is being answered)
     if (cr.has_seed) seed = cr.seed;
-    char id[32];
-    snprintf(id, sizeof(id), "chatcmpl-%u", ++api_count);
+    char id[48];   // (the time in it: ids of the tool calls stay unique when the app starts again)
+    snprintf(id, sizeof(id), "chatcmpl-%llx%u", (unsigned long long)time(NULL), ++api_count);
     const char* model = api_model();
     long long created = (long long)time(NULL);
     int fd = job->fd, cached = 0;
@@ -433,7 +496,6 @@ static void api_job(ApiJob* job) {
     if (read < 0) {
         api_snap_n = 0;
         sb_free(&text);
-        free(pool);
         api_error(fd, "HTTP/1.1 500 Internal Server Error", eng.error, "server_error", NULL);
         pos = 0;
         api_chat_end();
@@ -441,7 +503,6 @@ static void api_job(ApiJob* job) {
     }
     if (read > 0 && api_client_gone(fd)) {   // (no one to answer)
         sb_free(&text);
-        free(pool);
         pos = 0;
         api_chat_end();
         return;
@@ -468,7 +529,7 @@ static void api_job(ApiJob* job) {
     sb_init(&rtext);
     sb_init(&rpend);
     int in_call = text.n > 0;   // the reply is inside a tool call: its text is not streamed
-    int produced = 0, think_n = 0, stopped = read > 0, cut = 0, in_think = think;
+    int produced = 0, think_n = 0, stopped = read > 0, cut = 0, in_think = think, next_look = API_LOOK;
     const char* finish = "length";
     // The tokens to write: the one a step drew, after those it kept from the MTP head's draft (the model has read
     // these already). Without the head a step is one token.
@@ -485,6 +546,9 @@ static void api_job(ApiJob* job) {
             if (natural || t == IM_END || t == eng.eos2 || t == eng.eos || think_n >= think_budget) {
                 in_think = 0;   // the answer begins (the bytes of a cut character are left out of the reasoning)
                 rpend.n = 0;
+                // without max_tokens the answer has the rest of the context: what the reasoning did not use too
+                // (it begins after </think> or the closing sentence; 8 to spare for the blank line after them)
+                if (auto_max) cr.max_tokens = (int)eng.ctx_limit - pos - (natural ? 1 : 64) - 8;
                 if (!natural) {
                     // Qwen's closing sentence, </think> and the blank line; the answer is drawn after them
                     uint32_t ids[64];
@@ -532,20 +596,31 @@ static void api_job(ApiJob* job) {
             }
             if (has_tools && !in_call && pend.n) {
                 const char* call = strstr(pend.p, "<tool_call>");
-                if (call) {   // the text before the call goes out; the call itself is read at the end
-                    if (streamed && api_stream_piece(fd, id, model, created, &pend, (size_t)(call - pend.p), 0))
-                        client_gone = 1;
+                if (call) {   // the text before the call goes out (without the blank line); the call is read at the end
+                    size_t before_call = api_trim_end(pend.p, (size_t)(call - pend.p));
+                    if (streamed && api_stream_piece(fd, id, model, created, &pend, before_call, 0)) client_gone = 1;
                     pend.n = 0;
                     in_call = 1;
                 }
             }
             if (streamed && !in_call && pend.n) {
-                size_t safe = has_tools ? api_tool_prefix(pend.p, pend.n) : pend.n;
+                // with tools, spaces and line breaks at the end wait for what comes next: before a call they are left
+                // out, as from the content of a whole reply
+                size_t safe = has_tools ? api_trim_end(pend.p, api_tool_prefix(pend.p, pend.n)) : pend.n;
                 if (api_stream_piece(fd, id, model, created, &pend, safe, 0)) client_gone = 1;
             }
             if (produced == cr.max_tokens) break;
         }
         if (client_gone) break;
+        // a reply that is not streamed (or a tool call, whose text is not) sends nothing until it ends: a client that
+        // has closed its connection meanwhile is seen by a look at it now and then
+        if ((!streamed || in_call) && produced + think_n >= next_look) {
+            next_look = produced + think_n + API_LOOK;
+            if (api_client_gone(fd)) {
+                client_gone = 1;
+                break;
+            }
+        }
         if (iq < nq) continue;   // (the next token is one the last step kept)
         if (api_chat_step(produced + think_n)) {   // Circle: the reply ends here, cut short as by max_tokens
             stopped = 1;
@@ -577,16 +652,23 @@ static void api_job(ApiJob* job) {
     ApiToolCall calls[API_MAX_TOOL_CALLS];
     Sb before;
     sb_init(&before);
-    int n_calls = has_tools && !strcmp(finish, "stop") && text.p
-                      ? api_parse_tool_calls(pool, &cr, text.p, text.n, &before, calls, API_MAX_TOOL_CALLS)
-                      : 0;
+    int n_calls = 0;
+    if (has_tools && !strcmp(finish, "stop") && text.p && strstr(text.p, "<tool_call>")) {
+        // the tools' schemas say which arguments are not strings (without them, out of memory: all are text)
+        ChatRequest again;
+        pool = api_chat_parse_pool(job->body, job->body_len, &again, &err);
+        n_calls = api_parse_tool_calls(pool, pool ? &again : NULL, text.p, text.n, &before, calls,
+                                       cr.parallel_tool_calls ? API_MAX_TOOL_CALLS : 1);
+        free(pool);
+        for (int i = 0; i < n_calls; i++) snprintf(calls[i].id, sizeof(calls[i].id), "call_%s_%d", id + 9, i + 1);
+    }
     if (n_calls > 0) finish = "tool_calls";
-    free(pool);
     double dt = now() - t0;
     if (think)
         say("api: reasoning %d tokens%s", think_n, cut ? " (cut: closing sentence fed)" : in_think ? " (unfinished)" : "");
     say("api: %d tokens in %.1f s (%.1f tokens/s), %d tool calls, %s", produced + think_n, dt,
-        dt > 0 ? (produced + think_n) / dt : 0.0, n_calls, error ? "engine error" : stopped ? "stopped" : finish);
+        dt > 0 ? (produced + think_n) / dt : 0.0, n_calls,
+        error ? "engine error" : client_gone ? "the client left" : stopped ? "stopped" : finish);
 
     if (streamed) {
         if (!client_gone && !error) {
@@ -607,8 +689,15 @@ static void api_job(ApiJob* job) {
             Sb last;
             sb_init(&last);
             api_json_chunk(&last, id, model, created, NULL, "", 0, "", 0, finish);
-            if (!client_gone && last.p) api_send_event(fd, last.p);
+            if (!client_gone && last.p && api_send_event(fd, last.p)) client_gone = 1;
             sb_free(&last);
+            if (!client_gone && cr.include_usage) {   // (stream_options.include_usage: the usage, before [DONE])
+                Sb u;
+                sb_init(&u);
+                api_json_chunk_usage(&u, id, model, created, n, produced + think_n, think_n);
+                if (u.p && api_send_event(fd, u.p)) client_gone = 1;
+                sb_free(&u);
+            }
             if (!client_gone) api_send(fd, "data: [DONE]\n\n", 14);
         }
         if (error && !client_gone) {   // the headers are out: the error goes in the stream
@@ -618,6 +707,8 @@ static void api_job(ApiJob* job) {
             if (e.p) api_send_event(fd, e.p);
             sb_free(&e);
         }
+    } else if (client_gone) {
+        // (no one to answer)
     } else if (error) {
         api_error(fd, "HTTP/1.1 500 Internal Server Error", eng.error, "server_error", NULL);
     } else {

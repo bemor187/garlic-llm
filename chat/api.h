@@ -7,7 +7,9 @@
 
 #include <stddef.h>
 
+#ifndef API_PORT                  // (the PC test server, tests/api_host/server.c, picks its own)
 #define API_PORT 8080
+#endif
 
 typedef struct ApiJob {
     int fd;                     // the connection: the main thread writes the whole reply to it, api_done closes it
@@ -38,5 +40,8 @@ void api_console_busy(int busy);
 // The model's name as the API reports it.
 void api_set_model(const char* name);
 const char* api_model(void);
+// The context window GET /v1/models reports (context_length), in tokens: the engine's max_seq. Clients size their
+// prompts by it.
+void api_set_context(int tokens);
 
 #endif

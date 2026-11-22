@@ -1960,6 +1960,7 @@ int main(void) {
     view.temperature = 0.7f;
     think_config();
     api_set_model(MODEL_NAME);
+    api_set_context((int)eng.max_seq);   // (GET /v1/models reports it, so clients size their prompts)
     api_config();   // the OpenAI-compatible API (api.h), if it was left on; its jobs run in the loop below
 
     uint32_t prev = 0;
