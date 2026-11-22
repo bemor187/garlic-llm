@@ -161,12 +161,14 @@ static int read_request(int fd, char** buf_out, size_t* len_out, HttpRequest* re
     if (!buf) return -1;
     int r = 0;
     for (;;) {
-        if (len == cap) {
+        if (len == cap) {   // twice the room, or once the head is whole the request's own size (not twice 1 MiB)
+            size_t want = cap * 2, whole = req->head_len + (size_t)req->content_length;
+            if (req->head_len && whole > cap && whole < want) want = whole;
             if (cap >= API_MAX_BODY + 16384) break;
-            char* nb = realloc(buf, cap * 2);
+            char* nb = realloc(buf, want);
             if (!nb) break;
             buf = nb;
-            cap *= 2;
+            cap = want;
         }
         int n = sceNetRecv(fd, buf + len, cap - len, 0);
         if (n <= 0) break;

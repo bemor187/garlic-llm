@@ -417,6 +417,12 @@ def test_limits():
     check(status == 400, "n = 2")
     status, r = chat({"messages": [{"role": "user", "content": "z" * (1536 * 1024)}]})
     check(status == 413 and r and r["error"]["code"] == "request_too_large", "a body over 1 MiB: 413, read whole")
+    head = '{"messages": [{"role": "user", "content": "'
+    exact = head + "z " * ((1048576 - len(head) - 4) // 2) + '"}]}'
+    exact = exact[:-4] + " " * (1048576 - len(exact)) + '"}]}'
+    status, r = chat(exact)
+    check(len(exact) == 1048576 and status == 400 and r["error"]["code"] == "context_length_exceeded",
+          "a body of 1 MiB exactly is read (and is too long for the context)")
     log = log_text()
     check("request refused (" in log and "JSON values" in log and "over 1048576" in log, "refusals are logged")
 
