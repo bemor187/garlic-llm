@@ -5,7 +5,8 @@
 // Chat: Cross = keyboard, hold Square = talk, Circle = stop the answer, Triangle = new conversation,
 // L2 / R2 = temperature, Up / Down = scroll, OPTIONS = system keyboard (e.g. a USB keyboard), R3 / touch pad =
 // think before answering on / off, L3 = the OpenAI-compatible API on / off (api.h).
-// The model weights live in /data (see model.idx); GPU code, tokenizer and fonts are in the package's assets.
+// The model weights live in /data (see model.idx), or other weights for the same model in a folder of the models
+// folder (models.h, chosen at start); GPU code, tokenizer and fonts are in the package's assets.
 
 #include <math.h>
 #include <stdarg.h>
@@ -29,6 +30,7 @@
 #include "api.h"
 #include "api_proto.h"
 #include "engine.h"
+#include "models.h"
 #include "tokenizer.h"
 #include "pyrun.h"
 #include "ui.h"
@@ -39,6 +41,10 @@
 #define THINK 248068u           // Qwen3.5 <think> and </think>: an empty block = answer without thinking
 #define THINK_END 248069u
 #define MODEL_NAME (eng.qwen35 ? (eng.hidden >= 4096 ? "Qwen3.5-9B" : "Qwen3.5-4B") : "Qwen3-4B")
+// The model in use: the built-in one, or a folder of the models folder (model_choose), whose name is then the model's
+// name on the screen and in the API
+static char model_folder[MODEL_NAME_MAX];
+#define MODEL_SHOWN (model_folder[0] ? model_folder : MODEL_NAME)
 #define MAX_REPLY 3000
 // One log per app (so that opening the other app does not lose this one's log), and the one before it
 #if defined(GARLIC_4B)
@@ -344,7 +350,7 @@ static int code_msg(void) {
 }
 
 static void view_update(void) {
-    view.model = MODEL_NAME;
+    view.model = MODEL_SHOWN;
     view.pos = pos;
     view.max_seq = (int)eng.max_seq;
     view.can_run = !generating && code_msg() >= 0;
@@ -1888,6 +1894,84 @@ static void api_chat_end(void) {
 
 #include "api_run.inc"   // the OpenAI-compatible API's jobs on the model (api.c serves the requests)
 
+// ---- the models folder (models.h): other weights for the model, chosen before it loads -----------------------------
+// Only when MODELS_DIR holds a folder with them: a list starts on the one chosen last (the built-in model until then),
+// Up / Down move and Cross starts it. A folder whose files do not match the built-in model is not loaded: a screen
+// says so (Cross or Circle goes on) and the built-in model starts. Without such a folder nothing changes.
+
+#if defined(GARLIC_4B)
+#define BUILTIN_NAME "Qwen3.5-4B"
+#else
+#define BUILTIN_NAME "Qwen3.5-9B"
+#endif
+
+static char model_dir[128];   // MODELS_DIR/<model_folder>: eng_model_dir, and eng_mtp_dir if it has its own head
+
+static uint32_t newly_pressed(uint32_t* prev) {
+    uint32_t b = read_buttons(), pressed = b & ~*prev;
+    *prev = b;
+    return pressed;
+}
+
+static void model_choose(void) {
+    static char names[MODELS_MAX + 1][MODEL_NAME_MAX], notes[MODELS_MAX + 1][MODEL_NAME_MAX + 24];
+    const char* name_p[MODELS_MAX + 1];
+    const char* note_p[MODELS_MAX + 1];
+    char weights[64], last[MODEL_NAME_MAX], why[300], shown[160];
+    if (model_idx_file(ASSETS "/model.idx", weights, sizeof(weights))) return;
+    int n = models_scan(MODELS_DIR, weights, names + 1, MODELS_MAX);
+    if (n <= 0) return;   // no other model: the app starts as always
+    n++;                  // [0]: the built-in model
+    snprintf(names[0], MODEL_NAME_MAX, "%s", BUILTIN_NAME);
+    model_last_get(MODEL_LAST_FILE, last, sizeof(last));
+    int sel = 0;
+    for (int i = 0; i < n; i++) {
+        if (i) snprintf(notes[i], sizeof(notes[i]), "%s/%s", MODELS_DIR, names[i]);
+        name_p[i] = names[i];
+        note_p[i] = i ? notes[i] : tr(S_MODEL_BUILTIN);
+        if (i && !strcmp(names[i], last)) sel = i;
+    }
+    say("models: %d in %s; chosen last: %s", n - 1, MODELS_DIR, last[0] ? last : "the built-in model");
+    uint32_t prev = read_buttons();   // (a button still down from the home screen is not a choice)
+    for (;;) {
+        uint32_t pressed = newly_pressed(&prev);
+        if ((pressed & ORBIS_PAD_BUTTON_UP) && sel > 0) sel--;
+        if ((pressed & ORBIS_PAD_BUTTON_DOWN) && sel < n - 1) sel++;
+        if (pressed & ORBIS_PAD_BUTTON_CROSS) break;
+        draw_models(name_p, note_p, n, sel);
+        present();
+    }
+    if (!sel) {
+        say("models: the built-in model");
+        model_last_set(MODEL_LAST_FILE, "");
+        return;
+    }
+    snprintf(model_dir, sizeof(model_dir), "%s/%s", MODELS_DIR, names[sel]);
+    if (model_check(ASSETS "/model.idx", model_dir, why, sizeof(why), shown, sizeof(shown))) {
+        say("models: %s cannot be used: %s. The built-in model starts.", model_dir, why);
+        model_last_set(MODEL_LAST_FILE, "");
+        for (prev = read_buttons();;) {
+            if (newly_pressed(&prev) & (ORBIS_PAD_BUTTON_CROSS | ORBIS_PAD_BUTTON_CIRCLE)) break;
+            draw_model_bad(names[sel], shown);
+            present();
+        }
+        return;
+    }
+    say("models: %s", why);
+    model_last_set(MODEL_LAST_FILE, names[sel]);
+    snprintf(model_folder, sizeof(model_folder), "%s", names[sel]);
+    eng_model_dir = model_dir;
+#ifdef GARLIC_SPEC
+    int own = model_check_mtp(ASSETS "/mtp.idx", model_dir, why, sizeof(why));
+    if (own > 0) {
+        eng_mtp_dir = model_dir;
+        say("models: its own MTP head, %s", why);
+    } else {
+        say("models: the built-in MTP head drafts (%s%s)", own < 0 ? "its own does not match: " : "", why);
+    }
+#endif
+}
+
 int main(void) {
     if (rename(LOG_FILE, LOG_PREV)) unlink(LOG_FILE);   // the last log of this app is kept, as LOG_PREV
     say("starting");
@@ -1913,6 +1997,7 @@ int main(void) {
     }
     sceSystemServiceHideSplashScreen();   // the system shows pic1.png until the app says it is drawing
     say("video and fonts ready");
+    model_choose();   // (only if the models folder has another model for it)
     loading((void*)tr(S_PREPARING), 0.0f, NULL);
     size_t tsize;
     uint8_t* tdata = read_all(ASSETS "/tokenizer.bin", &tsize);
@@ -1949,7 +2034,7 @@ int main(void) {
     say("voice %s; system RAM free: %u MiB", tts_ready ? "ready" : "not available", (unsigned)(flex1 >> 20));
     view.temperature = 0.7f;
     think_config();
-    api_set_model(MODEL_NAME);
+    api_set_model(MODEL_SHOWN);
     api_config();   // the OpenAI-compatible API (api.h), if it was left on; its jobs run in the loop below
 
     uint32_t prev = 0;

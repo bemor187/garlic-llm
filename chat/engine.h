@@ -227,6 +227,11 @@ typedef struct {
 
 // Direct memory engine_init leaves to the system (MiB; main.c sets it before engine_init).
 extern int eng_margin_mb;
+// The model chosen from the models folder (main.c, models.h), set before engine_init: the weights file model.idx
+// names is read from eng_model_dir instead of the package or /data, and the MTP head's (spec_init) from eng_mtp_dir.
+// NULL = the usual places.
+extern const char* eng_model_dir;
+extern const char* eng_mtp_dir;
 // Reads model.idx and kernels.bin from assets_dir, reserves GPU memory and loads the weights file.
 int engine_init(Engine* e, const char* assets_dir, ProgressFn progress, void* user);
 // Runs n tokens through the model starting at position pos0 and samples the token after the last one.

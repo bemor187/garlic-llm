@@ -88,6 +88,18 @@ static void weights_locate(char* path) {
     say("weights: %s", path);
 }
 
+const char* eng_model_dir;   // (engine.h) the models folder's choice
+const char* eng_mtp_dir;
+
+// A weights file of the chosen model's folder instead: the same file name, in dir.
+static void weights_in(char* path, const char* dir) {
+    const char* base = strrchr(path, '/');
+    char p[129];
+    snprintf(p, sizeof(p), "%s/%s", dir, base ? base + 1 : path);
+    strcpy(path, p);
+    say("weights: %s (models folder)", path);
+}
+
 static uint8_t* read_file(const char* path, size_t* size) {
     int f = open(path, O_RDONLY);
     if (f < 0) return NULL;
@@ -281,7 +293,8 @@ static int load_index(Engine* e, const char* dir) {
     memcpy(&e->rope_theta, d + 48, 4);
     memcpy(e->weights_path, d + 52, 128);
     e->weights_path[128] = 0;
-    weights_locate(e->weights_path);
+    if (eng_model_dir) weights_in(e->weights_path, eng_model_dir);
+    else weights_locate(e->weights_path);
     memcpy(&e->weights_size, d + 180, 8);
     memcpy(&e->n_tensors, d + 188, 4);
     uint32_t rec0 = 192, vocab_map = 0;
