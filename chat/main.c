@@ -330,6 +330,9 @@ static char think_text[32768];
 static size_t think_len;
 static uint32_t hist_ids[MAX_REPLY + 16];   // the turn as the model keeps it: an empty <think></think>, the answer
 static int hist_n, hist_done;
+// The API keeps the state of its last prompt's beginning in the dictation's work memory (api_run.inc): this many
+// tokens of it, 0 = none. Anything else that runs the model or uses that memory sets it to 0.
+static int api_snap_n;
 static void start_turn(const char* user_text);
 
 static void toast(StrId id) {
@@ -546,6 +549,7 @@ static void think_toggle(void) {
 static int think_save(void) {
     uint64_t need = engine_state_size(&eng);
     if (!eng.asr.ws_end || eng.asr.ws_end - eng.asr.ws_begin < need) return 0;
+    api_snap_n = 0;   // (the same memory)
     double t0 = now();
     if (engine_state_copy(&eng, eng.asr.ws_begin, 1)) {
         say("thinking: state copy failed (%s): the reasoning stays in the history", eng.error);
@@ -691,6 +695,7 @@ static void system_ahead(int tokens) {
     if (sys_pre == 0) {
         sys_n = system_ids(sys_ids, 1024);
         engine_reset(&eng);
+        api_snap_n = 0;
     }
     int k = sys_n - sys_pre < tokens ? sys_n - sys_pre : tokens;
     uint32_t next;
@@ -710,6 +715,7 @@ static void start_turn(const char* user_text) {
     int n = 0, max = 8192, think = think_on && !in_voice_mode && eng.qwen35;
     think_t_ask = now();
     sys_pre = 0;   // (a system prompt half read ahead is read again below)
+    api_snap_n = 0;
     if (pos == 0) {
         engine_reset(&eng);   // a new conversation: clear the Gated DeltaNet states
         n = system_ids(ids, max);
@@ -1136,6 +1142,7 @@ static void asr_wait(void);
 
 static int voice_to_text(uint32_t button, DrawUnder under, char* text, int max) {
     text[0] = 0;
+    api_snap_n = 0;   // (dictation works in the memory the API's state copy is in)
     asr_wait();   // (after a Python program the dictation weights are read back first)
     if (!eng.asr.ready) {
         toast(S_ASR_OFF);
@@ -1531,6 +1538,7 @@ static void asr_wait(void) {
 }
 
 static void run_python(void) {
+    api_snap_n = 0;   // (the program borrows the dictation's memory)
     asr_wait();   // (a reload still running from the last program)
     asr_release(&eng);
     py_lent = (uint8_t*)asr_lent(&eng, &py_lent_size);
@@ -1689,6 +1697,7 @@ static void spec_lend(void) {
 
 static void voice_mode(void) {
     in_voice_mode = 1;
+    api_snap_n = 0;   // (the voice works in the dictation's memory)
 #ifdef GARLIC_SPEC
     if (spec_lent) {   // the MTP head had T3's weights memory: T3 reads its weights again (~3.5 s)
         double t0 = now();
@@ -2031,7 +2040,15 @@ static void model_choose(void) {
 #endif
 }
 
+// The C library's own locks (malloc, free, realloc, the list of open files) do nothing until its pthread_create says
+// a second thread exists, and this app's threads come from scePthreadCreate (the API's server, the screens, the
+// microphone, Python, the voice). So malloc ran unlocked whenever two of them allocated at the same moment, which
+// breaks the heap. __lock checks threads_minus_1, the 4th int of __libc in this C library, and is a plain spin lock
+// (no futex), so turning it on before any thread starts is safe.
+extern struct { int can_do_threads, threaded, secure; volatile int threads_minus_1; } __libc;
+
 int main(void) {
+    __libc.threads_minus_1 = 1;
     if (rename(LOG_FILE, LOG_PREV)) unlink(LOG_FILE);   // the last log of this app is kept, as LOG_PREV
     say("starting");
     boot_report();
@@ -2091,11 +2108,13 @@ int main(void) {
     view.temperature = 0.7f;
     think_config();
     api_set_model(MODEL_SHOWN);
+    api_set_context((int)eng.max_seq);   // (GET /v1/models reports it, so clients size their prompts)
     api_config();   // the OpenAI-compatible API (api.h), if it was left on; its jobs run in the loop below
 
     uint32_t prev = 0;
     int scroll_held = 0;
     for (;;) {
+        api_console_busy(generating);   // (for GET /health; the modes below that keep the model say so before)
         ApiJob* api_job_now = !generating && !in_voice_mode ? api_take() : NULL;
         if (api_job_now) {   // an API request: the model answers it now, the chat waits
             api_job(api_job_now);
@@ -2111,18 +2130,22 @@ int main(void) {
         } else if (pressed & (ORBIS_PAD_BUTTON_CROSS | ORBIS_PAD_BUTTON_OPTIONS)) {
             static char text[2048];
             int cross = (pressed & ORBIS_PAD_BUTTON_CROSS) != 0;
+            api_console_busy(1);
             if (cross ? keyboard(text, 1500, 0) : ask_user(text, sizeof(text))) {
                 say("user wrote %d bytes", (int)strlen(text));
                 start_turn(text);
             }
             prev = read_buttons();
         } else if (pressed & ORBIS_PAD_BUTTON_L1) {
+            api_console_busy(1);
             voice_mode();
             prev = read_buttons();
         } else if ((pressed & ORBIS_PAD_BUTTON_R1) && code_msg() >= 0) {
+            api_console_busy(1);
             run_python();
             prev = read_buttons();
         } else if (pressed & ORBIS_PAD_BUTTON_SQUARE) {
+            api_console_busy(1);
             push_to_talk();
             prev = read_buttons();
         } else if (pressed & ORBIS_PAD_BUTTON_TRIANGLE) {
