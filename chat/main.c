@@ -1890,7 +1890,15 @@ static void api_chat_end(void) {
 
 #include "api_run.inc"   // the OpenAI-compatible API's jobs on the model (api.c serves the requests)
 
+// The C library's own locks (malloc, free, realloc, the list of open files) do nothing until its pthread_create says
+// a second thread exists, and this app's threads come from scePthreadCreate (the API's server, the screens, the
+// microphone, Python, the voice). So malloc ran unlocked whenever two of them allocated at the same moment, which
+// breaks the heap. __lock checks threads_minus_1, the 4th int of __libc in this C library, and is a plain spin lock
+// (no futex), so turning it on before any thread starts is safe.
+extern struct { int can_do_threads, threaded, secure; volatile int threads_minus_1; } __libc;
+
 int main(void) {
+    __libc.threads_minus_1 = 1;
     if (rename(LOG_FILE, LOG_PREV)) unlink(LOG_FILE);   // the last log of this app is kept, as LOG_PREV
     say("starting");
     boot_report();
