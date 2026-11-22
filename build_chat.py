@@ -24,7 +24,7 @@ if "--4b" in sys.argv:
     TITLE, VERSION, TITLE_ID, SUFFIX = "Garlic LLM 4B", "1.17", "PSAI00002", "02"
     REMOTE = "/data/pkg/Garlic-LLM-4B.pkg"
 else:
-    TITLE, VERSION, TITLE_ID, SUFFIX = "Garlic LLM", "1.20", "PSAI00001", "01"
+    TITLE, VERSION, TITLE_ID, SUFFIX = "Garlic LLM", "1.21", "PSAI00001", "01"
     REMOTE = "/data/pkg/Garlic-LLM.pkg"
 FULL = "--full" in sys.argv
 # the weights of the all-in-one package (the names the .idx files give, see weights_locate)
