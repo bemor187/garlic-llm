@@ -15,19 +15,20 @@ Garlic LLM is a homebrew app for the PlayStation 4. It runs [Qwen3.5-9B](https:/
 | Feature | Details |
 |---|---|
 | **Text chat** | Qwen3.5-9B at 31–39 tokens/s, and up to 43 tokens/s on code. 16K-token context. |
-| **Voice conversation** | Speak and it answers aloud (Chatterbox) in Spanish, English, Portuguese, Russian, Italian, French, German, Arabic and Japanese. |
-| **Dictation** | Hold a button and talk instead of typing. It understands 25 European languages (Parakeet TDT 0.6B v3), and Arabic, Japanese, Korean, Chinese, Turkish and Vietnamese when the console is set to one of them (Nemotron 3.5 ASR). |
+| **Voice conversation** | Speak and it answers aloud (Chatterbox) in 9 languages: English, Spanish, Portuguese, Russian, Italian, French, German, Arabic and Japanese. |
+| **Dictation** | Hold a button and talk instead of typing. It understands 25 European languages (Parakeet TDT 0.6B v3), plus Arabic, Japanese, Korean, Chinese, Turkish and Vietnamese (Nemotron 3.5 ASR) when the console is set to one of them. |
+| **Interface** | In 11 languages. It follows the console's language: English, Spanish, Portuguese, Russian, French, German, Arabic, Japanese, Simplified Chinese, Traditional Chinese and Korean. |
 | **Python mode** | Ask for a program. It writes MicroPython and the console runs it. |
 | **Think mode** | The model reasons before it answers. Off by default; a thought takes about half a minute. |
 
 Everything runs on the console. Nothing is sent anywhere.
 
-Speeds were measured on a base/Slim PS4. On a PS4 Pro, chat runs at up to 45 tokens/s, and a native PS4 Pro mode reaches up to 60 tokens/s; that mode comes with the [experimental version 1.20](https://garlicllm.dev/download/#h-exp). In voice mode the chat model runs at about 22 tokens/s, because the voice model takes the memory that speculative decoding uses.
+Speeds were measured on a base/Slim PS4. On a PS4 Pro, Garlic LLM runs in the Pro's native mode, uses its full GPU and reaches up to 60 tokens/s. In voice mode the chat model runs at about 22 tokens/s, because the voice model takes the memory that speculative decoding uses.
 
 ## Requirements
 
 - A PS4, PS4 Slim or PS4 Pro running [GoldHEN](https://github.com/GoldHEN/GoldHEN). It works on firmware 9.00, 9.04, 11.00, 11.52, 12.02, 12.50, 13.52 and 14.00.
-- About 6 GB of free space, or 12 GB if you copy the package to the console's own disk before installing it.
+- About 6.5 GB of free space, or 13 GB if you copy the package to the console's own disk before installing it.
 - To use your voice: any ordinary microphone the console recognises.
 - To type on a real keyboard: any USB keyboard. Press OPTIONS in the chat to open the console's keyboard.
 
@@ -35,7 +36,7 @@ Other firmware versions are not tested yet. If you try one, please [open an issu
 
 ## Install
 
-1. Download the all-in-one package (about 5.7 GB, models inside) from [Hugging Face](https://huggingface.co/garlic-llm/garlic-llm-ps4).
+1. Download the all-in-one package (about 6.0 GB, models inside) from [Hugging Face](https://huggingface.co/garlic-llm/garlic-llm-ps4).
 2. Copy the PKG to the console and install it like any other homebrew package (*Settings → Debug Settings → Game → Package Installer*).
 3. Open **Garlic LLM** from the home screen. The first screen loads the model; after that it needs no PC and no connection.
 
@@ -77,7 +78,7 @@ After dictating, choose what to do with the text: ✕ send, △ edit, □ record
 
 **Voice mode:** hold □ to talk (this also interrupts the answer), △ starts a new chat, ○ leaves voice mode.
 
-The interface follows the console's language: English, Spanish, Portuguese, Russian, French, German, Arabic, Japanese, Chinese (Simplified and Traditional) or Korean. Arabic and Persian read right to left. The on-screen keyboard has a layout for each language except Chinese; for Chinese, press OPTIONS on the keyboard to use the console's own keyboard.
+The interface follows the console's language. Arabic and Persian text reads right to left. The on-screen keyboard has a layout for each interface language except Chinese; for Chinese, press OPTIONS on the keyboard to use the console's own keyboard.
 
 ## How it works
 
@@ -181,7 +182,7 @@ The scripts that made them from the original checkpoints are in `pc/`, and each 
 
 **Does it need internet?** No. The model, the voices and the speech recognition run on the console.
 
-**Does it run on a PS4 Pro?** Yes, at up to 45 tokens/s. The Pro runs Garlic as if it were a base PS4. A native PS4 Pro mode, which uses the Pro's full GPU, reaches up to 60 tokens/s; it comes with the [experimental version 1.20](https://garlicllm.dev/download/#h-exp).
+**Does it run on a PS4 Pro?** Yes. Garlic LLM runs in the Pro's native mode, which uses its full GPU, and reaches up to 60 tokens/s.
 
 **And on a PS5?** No. Garlic LLM is written for the PS4's GPU and system software.
 
