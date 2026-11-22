@@ -118,6 +118,39 @@ curl http://192.168.1.5:8080/v1/chat/completions \
 - For an API key, put it in `/data/garlic_api_key.txt` on the console. Requests then need `Authorization: Bearer <key>`. Without that file, anyone on your network can use the API while it is on, and clients that insist on a key accept any text.
 - If the screen shows `API · :8080`, the app could not read the console's address: it is in *Settings → Network → View Connection Status*.
 
+## Use another model
+
+Garlic LLM can start another model instead of the built-in Qwen3.5-9B: a fine-tune of Qwen3.5-9B that keeps its shapes and tokenizer, such as a coding model or an abliterated one. Other architectures and bigger models do not run.
+
+**Convert it.** On a PC with this repository, for a model on Hugging Face (`<model>` is the part of its name after the slash):
+
+```bash
+python pc/checkpoint.py <owner>/<model>
+python -m modal run pc/modal_qwen35_9b.py::convert --src <owner>/<model>
+modal volume get garlic-hf-cache out/<model>-mix.bin models/
+modal volume get garlic-hf-cache out/<model>-mix.json models/
+python pc/convert_9b_q4s.py --mix=models/<model>-mix.bin --out=models/<model>
+```
+
+- The first command checks the model against Qwen3.5-9B: its configuration and the name and shape of every tensor. A model that does not match stops there, with a list of what differs.
+- The second runs on Modal, like the first conversion of the built-in model (see [Build from source](#build-from-source)).
+- The last writes `models/<model>/`, the folder for the console.
+
+**Copy it to the console.** Start GoldHEN's FTP server, set `PS4_IP` to the console's address and run:
+
+```bash
+python pc/upload_model.py --model models/<model>
+```
+
+It checks the folder and copies it to `/data/garlic/models/<model>/`. A folder copied by hand works the same. It holds `qwen3.5-9b-q4s.bin`, and can also hold `model.idx`, `qwen3.5-9b-mtp.bin` and `mtp.idx`. Its name has at most 32 bytes. Each model takes 4.32 GiB on the console, or 4.52 GiB with its own MTP head.
+
+**Choose it.** When the models folder holds a model, the app shows a list before it loads: the built-in model first, then the folders. ↑ ↓ choose and ✕ starts. The app remembers the choice and opens the list on it the next time. With no model in the folder, the app starts as before.
+
+- It works with the all-in-one package and with a plain build.
+- The header and the API show the folder's name as the model's name.
+- A folder without its own `qwen3.5-9b-mtp.bin` uses the built-in MTP head. That head was trained on Qwen3.5-9B's own weights: the further a model's weights are from them, the fewer drafted tokens it accepts and the slower chat runs. `convert_9b_q4s.py` converts the model's own MTP head when its checkpoint has one.
+- Before it loads a folder, the app checks its files against the built-in model. If they do not match (another conversion, or a file copied halfway), it names the file and starts the built-in model.
+
 ## Build from source
 
 You only need this to change the app. The build scripts are written for Windows.
@@ -172,6 +205,7 @@ The scripts that made them from the original checkpoints are in `pc/`, and each 
 ## Troubleshooting
 
 - **"Couldn't start".** A model file is missing or incomplete. Install the package again. With a build from source, check the files in `/data` against the table above.
+- **"This model can't be used".** The chosen folder in `/data/garlic/models` does not match the built-in model, and the app started the built-in one. Convert the model again and copy it with `python pc/upload_model.py --model`, which checks the folder first.
 - **Dictation hears nothing.** Check that the console sees your microphone, and keep □ held while you speak.
 - **Anything else.** The app writes a log to `/data/ps4ai_log.txt`. Attach it when you [open an issue](https://github.com/leonardo-alegria/garlic-llm/issues).
 
