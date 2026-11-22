@@ -304,11 +304,12 @@ UI_CJK = {"ja": ("ja", VAR_JP), "zh-Hans": ("zh", 0), "zh-Hant": ("tc", VAR_TC),
 # the strings drawn as titles (font_big); text drawn in the chat, toasts and what only the model reads are left out
 # of the hint size (font_small)
 BIG_STRINGS = {"S_LISTENING", "S_TRANSCRIBING", "S_ERROR_TITLE", "S_PY_DONE", "S_PY_ERROR", "S_PY_STOPPED",
-               "S_PY_STARTING"}
+               "S_PY_STARTING", "S_MODEL_BAD_TITLE"}
 NOT_SMALL = {"S_SYSTEM_PROMPT", "S_PY_FIX_MSG", "S_PY_FIX_ASK", "S_CONTEXT_FULL", "S_API_DONE", "S_TAGLINE",
              "S_PLACEHOLDER", "S_NO_MIC", "S_NO_SPEECH", "S_ASR_OFF", "S_HOLD_LONGER", "S_THINK_ON_TOAST",
              "S_THINK_OFF_TOAST", "S_API_ON", "S_API_OFF", "S_API_FAILED", "S_API_BUSY", "S_VOICE_NO_TTS",
-             "S_VOICE_LOADING", "S_PY_INPUT", "S_LISTENING_SHORT", "S_THINKING"} | BIG_STRINGS
+             "S_VOICE_LOADING", "S_PY_INPUT", "S_LISTENING_SHORT", "S_THINKING", "S_MODEL_TITLE",
+             "S_MODEL_BAD"} | BIG_STRINGS
 
 
 def c_group(text, i):
