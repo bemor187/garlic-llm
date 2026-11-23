@@ -50,6 +50,7 @@ The branches:
 | Item | Status | Notes |
 |---|---|---|
 | OpenAI-compatible API | **done** (`darkgarlic`) | `/v1/chat/completions` with streaming, `/v1/models`, `/health`, optional API key. |
+| Ollama-compatible API | **next** | Ollama's `/api/chat`, `/api/generate`, `/api/tags`, `/api/show` and `/api/version` with streaming, optionally on port 11434, so Ollama clients and Open WebUI can use the PS4. API code only (`api.c`, `api_proto.c`, host tests). |
 | Tool / function calling in the API | **next** | Qwen3.5's chat template has tool calls. Parse `tools` and return `tool_calls`, so agents and coding tools can use the console. |
 | Anthropic-compatible `/v1/messages` | **later** | A thin mapping on top of the same job queue. |
 | Embeddings endpoint | **later** | The last hidden row, mean-pooled. That's enough for small local RAG. |
