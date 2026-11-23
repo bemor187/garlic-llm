@@ -72,6 +72,7 @@ Planner numbers (`pc/cluster_plan.py`), base PS4s:
 
 ### 2.4 Features
 
+- **Ollama-compatible API.** The console's server also answers Ollama's own API: `/api/chat`, `/api/generate`, `/api/tags`, `/api/show` and `/api/version`, with streaming, optionally on Ollama's port 11434. Open WebUI, Ollama clients, editor plugins and agent tools then treat the PS4 as an Ollama server. The work stays in `chat/api.c` and `chat/api_proto.c`, which host tests already cover, and the GPU engine does not change. Paired with GGUF import (§2.2), this gives most of the Ollama experience without porting Ollama itself.
 - **Tool / function calling in the API**, so agents and coding tools can use the console.
 - **Anthropic-compatible `/v1/messages`** and an embeddings endpoint.
 - **Documents from a USB drive (RAG).** Ask questions about your own files, offline.
