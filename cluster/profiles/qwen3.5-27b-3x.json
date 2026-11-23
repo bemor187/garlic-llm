@@ -1,0 +1,117 @@
+{
+  "name": "Abliterated Qwen3.5-27B",
+  "preset": "qwen3.5-27b",
+  "quant": "mlp3",
+  "console": "base",
+  "context": 16384,
+  "nodes": [
+    {
+      "node": 0,
+      "host": "PS4_0_IP",
+      "layers": [
+        0,
+        23
+      ],
+      "has_embed": true,
+      "has_head": false,
+      "weights": "/data/darkgarlic/node0.bin"
+    },
+    {
+      "node": 1,
+      "host": "PS4_1_IP",
+      "layers": [
+        23,
+        45
+      ],
+      "has_embed": false,
+      "has_head": false,
+      "weights": "/data/darkgarlic/node1.bin"
+    },
+    {
+      "node": 2,
+      "host": "PS4_2_IP",
+      "layers": [
+        45,
+        64
+      ],
+      "has_embed": false,
+      "has_head": true,
+      "weights": "/data/darkgarlic/node2.bin"
+    }
+  ],
+  "plan": {
+    "model": {
+      "arch": "qwen35",
+      "checkpoint": "huihui-ai/Huihui-Qwen3.5-27B-abliterated",
+      "layers": 64,
+      "hidden": 5120,
+      "inter": 17408,
+      "heads": 24,
+      "kv_heads": 4,
+      "head_dim": 256,
+      "lin_k_heads": 16,
+      "lin_v_heads": 48,
+      "lin_dk": 128,
+      "lin_dv": 128,
+      "full_interval": 4,
+      "vocab": 248320,
+      "keep_vocab": 248070,
+      "mtp": 1
+    },
+    "quant": "mlp3",
+    "console": "base",
+    "nodes": 3,
+    "context": 16384,
+    "total_weights_mib": 11718.6,
+    "embed_rows_on_disk_mib": 682.0,
+    "fits": true,
+    "node_plan": [
+      {
+        "node": 0,
+        "layers": [
+          0,
+          23
+        ],
+        "n_layers": 23,
+        "weights_mib": 3971.0,
+        "cache_mib": 157.7,
+        "used_mib": 4224.7,
+        "free_mib": 319.3,
+        "has_embed": true,
+        "has_head": false
+      },
+      {
+        "node": 1,
+        "layers": [
+          23,
+          45
+        ],
+        "n_layers": 22,
+        "weights_mib": 3790.9,
+        "cache_mib": 171.8,
+        "used_mib": 4058.6,
+        "free_mib": 485.4,
+        "has_embed": false,
+        "has_head": false
+      },
+      {
+        "node": 2,
+        "layers": [
+          45,
+          64
+        ],
+        "n_layers": 19,
+        "weights_mib": 3956.8,
+        "cache_mib": 145.2,
+        "used_mib": 4198.0,
+        "free_mib": 346.0,
+        "has_embed": false,
+        "has_head": true
+      }
+    ],
+    "est_tokens_per_s_single_stream": 8.2,
+    "kernel_gaps": [
+      "6 query heads per KV head: shaders/attn.h GQ_MAX is 4 (ROADMAP: GQA > 4)"
+    ]
+  }
+}
