@@ -157,9 +157,10 @@ def main():
     sce = ROOT / "chat" / "sce_sys"
     sce.mkdir(exist_ok=True)
     ic = icon()
-    ic.save(sce / "icon0.png")
+    # (optimize: both go into the package's body, which must stay small; see build_chat.py, BODY_NOTE)
+    ic.save(sce / "icon0.png", optimize=True)
     bg = background()
-    bg.save(sce / "pic1.png")
+    bg.save(sce / "pic1.png", optimize=True)
     hero().save(ROOT / "docs" / "chat.png")
     prev = Image.new("RGB", (512 + 20 + 960, 540), (20, 20, 20))
     prev.paste(ic, (0, 14))
