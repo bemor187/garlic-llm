@@ -49,6 +49,8 @@ What you gain is quality: Qwen3.5-27B against 9B. Speed only goes up when severa
 
 If `/data/darkgarlic/model.idx` exists, the engine uses it instead of the packaged one. Without the trailer it is treated as a whole model. That also lets you try any other converted model without rebuilding the package.
 
+Upstream's models folder (`/data/garlic/models/<name>/`, new in 1.21) works next to it for whole Qwen3.5-9B fine-tunes, chosen from a list at start. It cannot hold a shard: it only accepts a folder whose `model.idx` matches the built-in model's and whose weights file is full size. When `/data/darkgarlic/model.idx` exists, the app skips that list and loads the override, so a cluster's consoles start without a button press. Remove the file to get the list back.
+
 ### Wire protocol (`cluster_proto.h`)
 
 Every message is a 40-byte little-endian header followed by a payload. The header holds `magic "DGCL", version, op, seq, pos0, n, flags, temperature, seed, payload, check`. `check` is the FNV-1a hash of the payload, so a framing bug produces an error message instead of a wrong answer.
