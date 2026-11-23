@@ -2,6 +2,10 @@
 
 # Garlic LLM
 
+> **This is bemor187's fork.** Its own build, **DarkGarlic LLM** (abliterated Qwen3.5-9B, OpenAI-compatible API, and the multi-PS4 cluster work), lives on the [`darkgarlic`](https://github.com/bemor187/garlic-llm/tree/darkgarlic) branch. This `main` branch follows the original Garlic LLM by Leonardo Alegría.
+>
+> 🙏 **DarkGarlic needs hardware to reach Stage 2** ([future plans](https://github.com/bemor187/garlic-llm/blob/darkgarlic/docs/FUTURE_PLANS.md)): PS4 Pros, Dell PowerEdge servers, compute, or any amount through Cash App [$bemor187](https://cash.app/$bemor187) or PayPal [kultivatedkustoms@gmail.com](https://www.paypal.com/donate/?business=kultivatedkustoms%40gmail.com&currency_code=USD). To donate hardware or compute, [open an issue](https://github.com/bemor187/garlic-llm/issues/new). The support links further down this page are Leonardo's, for the original app.
+
 **A 9-billion-parameter language model running on a PS4. Offline.**
 
 Garlic LLM is a homebrew app for the PlayStation 4. It runs [Qwen3.5-9B](https://huggingface.co/Qwen) on the console's own GPU, with no PC and no internet while it runs. It also listens, talks, and runs the Python it writes.
