@@ -4,6 +4,8 @@ A fork of [Garlic LLM](https://github.com/leonardo-alegria/garlic-llm) by Leonar
 
 The screen is black, white and red. The mark is a white garlic in a black cape with a red lining and two fangs. The home-screen title is **DarkGarlic LLM**. The title id is still `PSAI00001`, so this package installs over Garlic LLM.
 
+Future plans: [docs/FUTURE_PLANS.md](docs/FUTURE_PLANS.md) (Stage 2: multi-PS4 clusters, bigger models, speed and API features, once funded).
+
 ## Weights
 
 Git does not contain the weights (`models/` is ignored, and GitHub will not take a 4.6 GB file). A converted pair that matches the `model.idx` shipped in this branch:
