@@ -18,7 +18,7 @@ The branches:
 
 | Item | Status | Notes |
 |---|---|---|
-| Model override folder `/data/darkgarlic/` | **in this branch** | When `model.idx` is there, the engine uses it and the weights it names instead of the package's. You can swap models without rebuilding the 5.6 GB package. The MTP head is also read from there, never mixed with the package's. |
+| Model override folder `/data/darkgarlic/` | **in this branch** | When `model.idx` is there, the engine uses it and the weights it names instead of the package's. You can swap models without rebuilding the 5.6 GB package. The MTP head is also read from there, never mixed with the package's. A weights file whose name matches the packaged model is not redirected to `/app0/models`. |
 | Model name from the model | **in this branch** | The screen and API name comes from `cluster.txt`'s `name =`, then the shard's name, then the old guess from the model's shape. |
 | Planner for any Qwen3 / Qwen3.5 dense `config.json` | **in this branch** | `pc/cluster_plan.py --config <config.json> --nodes N`: memory per console, fit, speed estimate, and which kernel limits the shape hits. |
 | Cluster shards + protocol + tools | **in this branch** | docs/CLUSTER.md. |
@@ -50,8 +50,8 @@ The branches:
 | Item | Status | Notes |
 |---|---|---|
 | OpenAI-compatible API | **done** (`darkgarlic`) | `/v1/chat/completions` with streaming, `/v1/models`, `/health`, optional API key. |
-| Ollama-compatible API | **next** | Ollama's `/api/chat`, `/api/generate`, `/api/tags`, `/api/show` and `/api/version` with streaming, optionally on port 11434, so Ollama clients and Open WebUI can use the PS4. API code only (`api.c`, `api_proto.c`, host tests). |
-| Tool / function calling in the API | **next** | Qwen3.5's chat template has tool calls. Parse `tools` and return `tool_calls`, so agents and coding tools can use the console. |
+| Ollama-compatible API | **in this branch** | `/api/chat`, `/api/generate`, `/api/tags`, `/api/show` and `/api/version` on port 8080, the same socket as the OpenAI API. Point a client at `OLLAMA_HOST=http://<ps4>:8080`. Streaming is NDJSON and `stream` defaults to true. `options.num_predict` of -1 is capped at 4096. Port 11434 is not opened: the console accepts on one blocking socket. |
+| Tool / function calling in the API | **in this branch** | Qwen3.5 XML tool calls on port 8080. A request with `tools` renders the chat template and the reply returns OpenAI `tool_calls` (`finish_reason` `tool_calls`) or Ollama `tool_calls` with arguments as an object. The tool XML is not streamed. |
 | Anthropic-compatible `/v1/messages` | **later** | A thin mapping on top of the same job queue. |
 | Embeddings endpoint | **later** | The last hidden row, mean-pooled. That's enough for small local RAG. |
 | Documents from USB (RAG) | **later** | Index text files from `/mnt/usb0` and put the relevant passages into the prompt. |
@@ -64,5 +64,6 @@ The branches:
 | Item | Status | Notes |
 |---|---|---|
 | Worker reconnect | **later** | The head shows an error screen if a worker drops. It should reconnect, then RESET and replay the conversation. |
-| Model fingerprint in HELLO | **next** | Today the check is the name and shape. A hash of each shard's `model.idx` would catch mixed conversions. |
+| Model fingerprint in HELLO | **in this branch** | HELLO is 68 bytes: the previous 64, plus a hash of `n_layers`, `hidden`, `vocab` and each tensor's rows, cols and fmt. Offsets and file sizes are not hashed, so every shard of one conversion matches. A 64-byte HELLO (fingerprint 0) still chains. |
+| Layer kind past layer 31 | **in this branch** | `full_mask` is 32 bits. Qwen3 (every layer full) and Qwen3.5 (full every 4th layer) stay correct through layer 63. A shift of 32 or more is undefined and is not used. The sharder uses the same rule. |
 | Head-side status on screen | **later** | Show each worker's node, layers and round-trip time in the chat header next to the API address. |

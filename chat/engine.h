@@ -232,6 +232,7 @@ typedef struct Engine {
     int shard;
     uint32_t l0, l1, node, nodes, has_lm, has_embed;
     char shard_name[32];
+    uint32_t idx_hash;            // shape hash for the cluster HELLO (0 until load_index fills it)
     char model_dir[96];           // where model.idx came from (ASSETS or /data/darkgarlic)
     uint64_t ostage;              // a node without lm_head: each step's output row (STEPS_PER_SUBMIT rows)
     int stage_in;                 // this run's first layer reads its rows from staging (embedding rows or rows_in)

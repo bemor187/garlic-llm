@@ -47,7 +47,7 @@ What you gain is quality: Qwen3.5-27B against 9B. Speed only goes up when severa
 - `/data/darkgarlic/node<k>.bin`, laid out as `[GPU part: final_norm, this node's layers, lm_head on the last node][embedding rows on node 0][ids]`.
 - `/data/darkgarlic/model.idx`. It keeps every tensor record in the original order, because the engine finds a layer's tensors by position. Tensors held by another console get offset 0 and size 0; their shape and format stay. After the records comes the trailer: `"PSHD", version 1, node, nodes, layer_first, layer_end, flags (1 embed, 2 lm_head), name[32]`.
 
-If `/data/darkgarlic/model.idx` exists, the engine uses it instead of the packaged one. Without the trailer it is treated as a whole model. That also lets you try any other converted model without rebuilding the package.
+If `/data/darkgarlic/model.idx` exists, the engine uses it instead of the packaged one, and it keeps the weights path that index names (it is not replaced by `/app0/models/<same file name>`). Without the trailer it is treated as a whole model. That also lets you try any other converted model without rebuilding the package.
 
 ### Wire protocol (`cluster_proto.h`)
 
@@ -55,7 +55,7 @@ Every message is a 40-byte little-endian header followed by a payload. The heade
 
 | Op | Direction | Payload |
 |---|---|---|
-| `HELLO` | head → worker → head | 64-byte `ClusterHello`: node, nodes, layer range, model shape, name |
+| `HELLO` | head → worker → head | 68-byte `ClusterHello`: node, nodes, layer range, model shape, name, fingerprint. A 64-byte reply (no fingerprint) is still accepted. |
 | `RUN` | head → worker | `n` rows × `hidden` fp32 for positions `pos0..`; `flags & SAMPLE` asks for the token |
 | `ROWS` | middle worker → head | the worker's `n` output rows |
 | `TOKEN` | last worker → head | the u32 lm_head row (nothing if no token was asked for) |
@@ -79,7 +79,7 @@ These are planner numbers (`python pc/cluster_plan.py --list`) for base PS4s wit
 
 ## Bring-up plan
 
-**M0: host checks (done).** `gcc ... tests/cluster_proto_test.c` (35 checks), `python pc/shard_model.py --self-test`, and the planner's 9B size matching the real file.
+**M0: host checks (done).** `tests/cluster_proto_test.c` (43 checks), `tests/layer_mask_test.c`, `tests/api_proto_test.c`, `tests/api_run_test.c`, `python pc/shard_model.py --self-test`, and the planner's 9B size matching the real file.
 
 **M1: the 9B split over two consoles answers exactly like one console.**
 
@@ -104,4 +104,5 @@ These are planner numbers (`python pc/cluster_plan.py --list`) for base PS4s wit
 - If a worker drops mid-reply, the head shows an error screen. Restart the head. Reconnecting is on the roadmap.
 - Each relayed message is copied once out of write-combined GPU memory and hashed (FNV-1a). That costs ~1–3 ms per 32-row prompt batch and nothing noticeable per decoded token.
 - Voice mode on the head is untested in a cluster. It should have more room than on a single console, because the head holds fewer weights.
-- The head connects to workers in `cluster.txt` order. Start the workers first.
+- The head connects to workers in `cluster.txt` order. Start the workers first. A worker address may end in `:8091`. Any other port is rejected: workers listen only on 8091.
+- The head refuses a model whose hidden size is above 8192, and a shard whose local layers are missing weights. HELLO carries a fingerprint of the tensor shapes; mixed conversions are rejected when both sides send one.

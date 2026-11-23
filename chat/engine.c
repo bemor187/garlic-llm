@@ -8,6 +8,8 @@
 // for Qwen3.5, shaders/qwen35.cl, whose DeltaNet layers replace attention by conv + delta rule).
 
 #include "engine.h"
+#include "cluster_proto.h"
+#include "layer_mask.h"
 
 #include <fcntl.h>
 #include <math.h>
@@ -63,6 +65,10 @@ static void spec_prefill(Engine* e, uint64_t stage, uint32_t n, uint32_t pos0);
 uint64_t spec_carry(void);
 #endif
 static int gpu_selftest(Engine* e);   // (after begin)
+
+static int layer_full(const Engine* e, uint32_t i) {
+    return garlic_layer_full(e->qwen35, e->full_mask, i);
+}
 
 static void fail(Engine* e, const char* fmt, ...) {
     va_list ap;
@@ -267,6 +273,55 @@ static int load_kernels(Engine* e, const char* dir) {
 // cluster shard (pc/shard_model.py) or any other converted model, without rebuilding the package.
 #define MODEL_OVERRIDE_DIR "/data/darkgarlic"
 
+// Same value on every shard of one conversion: shapes and formats, not offsets or file sizes (those differ per node).
+// 0 is reserved for "not set", so a hash of 0 is stored as 1.
+static uint32_t model_fingerprint(const Engine* e) {
+    uint32_t h = cluster_fnv_init();
+    uint32_t shape[3] = {e->n_layers, e->hidden, e->vocab};
+    h = cluster_fnv_mix(h, shape, sizeof(shape));
+    for (uint32_t i = 0; i < e->n_tensors; i++) {
+        uint32_t rec[3] = {e->t[i].rows, e->t[i].cols, e->t[i].fmt};
+        h = cluster_fnv_mix(h, rec, sizeof(rec));
+    }
+    return h ? h : 1u;
+}
+
+// Off-node tensors are stored with size 0. The ones this console runs must be present, or a matvec reads offset 0.
+static int shard_weights_present(Engine* e) {
+    if (e->nodes > 1 && e->has_lm && !e->has_head) {
+        fail(e, "model.idx: the last node needs an untied lm_head (embedding rows stay on node 0)");
+        return -1;
+    }
+    for (uint32_t i = e->l0; i < e->l1; i++) {
+        uint32_t n = layer_full(e, i) ? 8u : 10u;
+        uint32_t b = e->layer_base ? e->layer_base[i] : 0;
+        if (!e->layer_base || b + n > e->n_tensors) {
+            fail(e, "model.idx: layer %u is past the tensor list", i);
+            return -1;
+        }
+        for (uint32_t k = 0; k < n; k++)
+            if (!e->t[b + k].size) {
+                fail(e, "model.idx: layer %u is missing a weight", i);
+                return -1;
+            }
+    }
+    if (e->has_embed && (!e->n_tensors || !e->t[0].size)) {
+        fail(e, "model.idx: this node should hold the embedding rows");
+        return -1;
+    }
+    if (e->has_lm) {
+        if (e->n_tensors < 2 || !e->t[1].size) {
+            fail(e, "model.idx: this node should hold the final norm");
+            return -1;
+        }
+        if (e->has_head && (e->head_idx >= e->n_tensors || !e->t[e->head_idx].size)) {
+            fail(e, "model.idx: this node should hold lm_head");
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static int load_index(Engine* e, const char* dir) {
     char path[256];
     size_t size;
@@ -292,7 +347,12 @@ static int load_index(Engine* e, const char* dir) {
     memcpy(&e->rope_theta, d + 48, 4);
     memcpy(e->weights_path, d + 52, 128);
     e->weights_path[128] = 0;
-    weights_locate(e->weights_path);
+    // An override index names its own weights. Do not swap in /app0/models/<basename> when that file is the
+    // packaged model: the override's offsets would be read against the wrong bytes.
+    if (strcmp(e->model_dir, MODEL_OVERRIDE_DIR) != 0)
+        weights_locate(e->weights_path);
+    else
+        say("weights: %s", e->weights_path);
     memcpy(&e->weights_size, d + 180, 8);
     memcpy(&e->n_tensors, d + 188, 4);
     uint32_t rec0 = 192, vocab_map = 0;
@@ -314,7 +374,7 @@ static int load_index(Engine* e, const char* dir) {
     e->layer_base = calloc(e->n_layers, sizeof(uint32_t));
     for (uint32_t i = 0, b = 2; i < e->n_layers; i++) {   // full attention 8 tensors per layer, DeltaNet 10
         e->layer_base[i] = b;
-        b += (e->full_mask >> i & 1) ? 8 : 10;
+        b += (layer_full(e, i)) ? 8 : 10;
     }
     if (size < rec0 + (uint64_t)e->n_tensors * 36) {
         free(d);
@@ -353,10 +413,13 @@ static int load_index(Engine* e, const char* dir) {
     }
     free(d);
     e->head_idx = e->has_head ? e->n_tensors - 1 - vocab_map : 0;
-    if (vocab_map && (e->t[e->n_tensors - 1].fmt != 7 || e->t[e->n_tensors - 1].rows != e->vocab)) {
+    if (vocab_map && (!e->n_tensors || e->t[e->n_tensors - 1].fmt != 7 || e->t[e->n_tensors - 1].rows != e->vocab ||
+                      !e->t[e->n_tensors - 1].size)) {
         fail(e, "model.idx: the ids record does not match the vocabulary");
         return -1;
     }
+    e->idx_hash = model_fingerprint(e);
+    if (e->shard && shard_weights_present(e)) return -1;
     return 0;
 }
 
@@ -435,7 +498,7 @@ int engine_init(Engine* e, const char* dir, ProgressFn progress, void* user) {
         // lending it shortens the context to 8192 (lend_ctx); with 8K, lending it leaves the context whole.
         static const uint32_t tab[40] = {TQ_TABLE};
         uint64_t kb = (uint64_t)e->n_kv * 8192 * (e->head_dim / 2 + 4), n_full = 0;
-        for (uint32_t i = e->l0; i < e->l1; i++) n_full += e->full_mask >> i & 1;   // (this console's layers)
+        for (uint32_t i = e->l0; i < e->l1; i++) n_full += layer_full(e, i);   // (this console's layers)
         uint64_t all = gpu_alloc(e, n_full * 2 * kb);
         e->kv_split = n_full * (4096ull * e->n_kv * e->head_dim * 2 + 4096ull * e->n_kv * (e->head_dim + 4));
         e->kv_hi = e->kv_split ? gpu_alloc(e, e->kv_split) : 0;
@@ -452,7 +515,7 @@ int engine_init(Engine* e, const char* dir, ProgressFn progress, void* user) {
         e->tq_tab = gpu_alloc(e, 256);
         if (e->tq_tab) memcpy((void*)(uintptr_t)e->tq_tab, tab, sizeof(tab));
         for (uint32_t i = e->l0, j = 0; all && e->tq_tab && i < e->l1; i++) {
-            if (e->full_mask >> i & 1) {
+            if (layer_full(e, i)) {
                 e->kc[i] = all + j * 2 * kb;
                 e->vc[i] = e->kc[i] + kb;
                 j++;
@@ -471,13 +534,13 @@ int engine_init(Engine* e, const char* dir, ProgressFn progress, void* user) {
         // k and v in two halves of max_seq / 2 positions (ATTN_SPLIT): the first halves of all the layers in one
         // block, the second halves in the next, kv_split bytes further
         uint64_t khalf = e->layer_cache / 2, vhalf = (uint64_t)e->max_seq / 2 * e->n_kv * (e->head_dim + 4), n_full = 0;
-        for (uint32_t i = e->l0; i < e->l1; i++) n_full += e->full_mask >> i & 1;
+        for (uint32_t i = e->l0; i < e->l1; i++) n_full += layer_full(e, i);
         e->kv_split = n_full * (khalf + vhalf);
         uint64_t lo = gpu_alloc(e, e->kv_split);
         e->kv_hi = gpu_alloc(e, e->kv_split);
         if (lo && e->kv_hi && e->kv_hi != lo + e->kv_split) e->kv_hi = 0;   // (gpu_alloc rounds to 256 bytes)
         for (uint32_t i = e->l0, j = 0; lo && e->kv_hi && i < e->l1; i++) {
-            if (e->full_mask >> i & 1) {
+            if (layer_full(e, i)) {
                 e->kc[i] = lo + j * (khalf + vhalf);
                 e->vc[i] = e->kc[i] + khalf;
                 j++;
@@ -488,7 +551,7 @@ int engine_init(Engine* e, const char* dir, ProgressFn progress, void* user) {
         }
     } else {
         for (uint32_t i = e->l0; i < e->l1; i++) {
-            int full = e->full_mask >> i & 1;
+            int full = layer_full(e, i);
             e->kc[i] = gpu_alloc(e, full ? e->layer_cache : e->conv_n * 12);
             e->vc[i] = gpu_alloc(e, full ? e->layer_cache : e->state_bytes);
         }
@@ -538,7 +601,7 @@ int engine_init(Engine* e, const char* dir, ProgressFn progress, void* user) {
     // the batched prompt: q4i / q3i matrices (rows in tiles of 64), and e->pf_rows rows of each buffer
     uint64_t pf_wa = 0, pf_wh = 0;
     for (uint32_t i = e->l0; e->pf && i < e->l1; i++) {
-        uint32_t b = e->layer_base[i], full = e->full_mask >> i & 1;
+        uint32_t b = e->layer_base[i], full = layer_full(e, i);
         uint32_t m[4] = {b + (full ? 4 : 2), b + (full ? 5 : 7), b + (full ? 6 : 8), b + (full ? 7 : 9)};
         for (int j = 0; j < 4; j++) {
             const Tensor* t = &e->t[m[j]];
@@ -649,7 +712,7 @@ void engine_kv_return(Engine* e) { e->ctx_limit = e->max_seq; }
 
 void engine_reset(Engine* e) {
     for (uint32_t i = e->l0; i < e->l1; i++)
-        if (!(e->full_mask >> i & 1)) {
+        if (!(layer_full(e, i))) {
             memset((void*)(uintptr_t)e->kc[i], 0, e->conv_n * 12);
             memset((void*)(uintptr_t)e->vc[i], 0, e->state_bytes);
         }
@@ -844,7 +907,7 @@ static void step(Engine* e, uint32_t pos, uint32_t forced, uint32_t slot, int sa
         // full attention: attn_norm, mlp_norm, q_norm, k_norm, wqkv, wo, wgu, wdown
         // Gated DeltaNet:  attn_norm, mlp_norm, w_in, conv, A, dt_bias, gnorm, wout, wgu, wdown
         uint32_t b = e->layer_base[i];
-        int full = e->full_mask >> i & 1;
+        int full = layer_full(e, i);
         uint32_t mlp = b + (full ? 6 : 8);
         uint64_t kc = e->kc[i], vc = e->vc[i];
         dispatch(e, e->k_rmsnorm, args(e, "pppuf", e->x, W(e, b), e->xn, e->hidden, (double)e->eps), 1, 256);
@@ -971,7 +1034,7 @@ static void prefill(Engine* e, uint64_t stage, const uint32_t* tokens, uint32_t 
     }
     for (uint32_t i = e->l0; i < e->l1; i++) {
         uint32_t b = e->layer_base[i];
-        int full = e->full_mask >> i & 1;
+        int full = layer_full(e, i);
         uint32_t mlp = b + (full ? 6 : 8);
         uint64_t kc = e->kc[i], vc = e->vc[i];
         dispatch(e, e->k_rmsr, args(e, "pppuf", e->pf_x, W(e, b), e->pf_xn, H, (double)e->eps), n, 256);
@@ -1188,7 +1251,7 @@ static int gpu_selftest(Engine* e) {
 uint64_t engine_state_size(const Engine* e) {
     uint64_t n = 0;
     for (uint32_t i = e->l0; i < e->l1; i++)
-        if (!(e->full_mask >> i & 1)) n += ((e->conv_n * 12 + 255) & ~255ull) + ((e->state_bytes + 255) & ~255ull);
+        if (!(layer_full(e, i))) n += ((e->conv_n * 12 + 255) & ~255ull) + ((e->state_bytes + 255) & ~255ull);
 #ifdef GARLIC_SPEC
     if (spec_carry()) n += (uint64_t)e->hidden * 4;   // the MTP head's carry (h before the next token)
 #endif
@@ -1200,7 +1263,7 @@ int engine_state_copy(Engine* e, uint64_t buf, int save) {
     begin(e);
     uint64_t p = buf;
     for (uint32_t i = e->l0; i < e->l1; i++) {
-        if (e->full_mask >> i & 1) continue;
+        if (layer_full(e, i)) continue;
         const uint64_t part[2][2] = {{e->kc[i], e->conv_n * 12}, {e->vc[i], e->state_bytes}};
         for (int j = 0; j < 2; j++) {
             uint32_t n = (uint32_t)(part[j][1] / 4);
@@ -1341,7 +1404,7 @@ static void mm_tune(Engine* e) {
     e->pf_nmm = 0;
     if (!e->pf) return;
     for (uint32_t i = e->l0; i < e->l1 && e->pf_nmm < 8; i++) {
-        uint32_t b = e->layer_base[i], full = e->full_mask >> i & 1;
+        uint32_t b = e->layer_base[i], full = layer_full(e, i);
         uint32_t m[4] = {b + (full ? 4 : 2), b + (full ? 5 : 7), b + (full ? 6 : 8), b + (full ? 7 : 9)};
         for (int j = 0; j < 4 && e->pf_nmm < 8; j++) {
             const Tensor* t = &e->t[m[j]];

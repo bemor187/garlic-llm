@@ -1,6 +1,6 @@
 """Split a converted DarkGarlic model (model.idx + its .bin) into one shard per console for the cluster.
 
-  python pc/shard_model.py cluster/profiles/qwen3.5-9b-2x.json --idx chat/assets_9b/model.idx \
+  python pc/shard_model.py cluster/profiles/qwen3.5-9b-2x-test.json --idx chat/assets_9b/model.idx \
          --bin models/qwen3.5-9b-q4s.bin --out models/cluster-9b-2x
   -> models/cluster-9b-2x/node0/{model.idx,node0.bin}, node1/..., and a SHA-256 list
 
@@ -51,6 +51,28 @@ def read_idx(path):
     return dict(header=h, ext=ext, recs=recs)
 
 
+def layer_full(ext, full_mask, i):
+    """Same rule as chat/layer_mask.h. A Python int shift by >= 32 is 0, which would mark Qwen3
+    layers 32.. and Qwen3.5's later full-attention layers as DeltaNet."""
+    if ext is None:
+        return True
+    if i < 32:
+        return ((full_mask >> i) & 1) != 0
+    interval = 0
+    for b in range(32):
+        if (full_mask >> b) & 1:
+            interval = b + 1
+            break
+    if not interval:
+        return False
+    for b in range(32):
+        expect = ((b + 1) % interval) == 0
+        got = ((full_mask >> b) & 1) != 0
+        if expect != got:
+            return False
+    return ((i + 1) % interval) == 0
+
+
 def layout(idx):
     """Index of every tensor: embed, final_norm, per-layer lists, head, ids."""
     h, ext, recs = idx["header"], idx["ext"], idx["recs"]
@@ -59,7 +81,7 @@ def layout(idx):
     flags = ext[7] if ext else 0
     layers, b = [], 2
     for i in range(n_layers):
-        k = 8 if (full_mask >> i) & 1 else 10
+        k = 8 if layer_full(ext, full_mask, i) else 10
         layers.append(list(range(b, b + k)))
         b += k
     vocab_map = (flags >> 2) & 1
@@ -195,6 +217,18 @@ def self_test():
         for nm, c in seen.items():
             want = 3 if nm in ("final_norm", "ids") else 1
             assert c == want, (nm, c)
+    # Layers past the 32-bit mask. A Python shift by >= 32 is 0, which used to call those layers DeltaNet.
+    pmdl = layout({"header": [b"PMDL", 40], "ext": None, "recs": [None] * (2 + 40 * 8)})
+    if any(len(pmdl["layers"][i]) != 8 for i in range(40)):
+        sys.exit("PMDL 40: a layer was not full attention")
+    n_full = sum(1 for i in range(64) if (i + 1) % 4 == 0)
+    nrec = 2 + n_full * 8 + (64 - n_full) * 10 + 1
+    ext = (0, 0, 0, 0, 0, 0x88888888, 0, 1)
+    q = layout({"header": [b"PMQ5", 64], "ext": ext, "recs": [None] * nrec})
+    if len(q["layers"][32]) != 10 or len(q["layers"][35]) != 8 or len(q["layers"][63]) != 8:
+        sys.exit("PMQ5 64: layer kinds past 31 are wrong")
+    if q["head"] != nrec - 1:
+        sys.exit("PMQ5 64: lm_head index")
     print("shard_model self-test: OK")
 
 

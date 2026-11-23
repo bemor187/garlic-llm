@@ -4,15 +4,22 @@
 #include <stdio.h>
 #include <string.h>
 
-uint32_t cluster_fnv(const void* p, size_t n) {
+uint32_t cluster_fnv_init(void) { return 2166136261u; }
+
+uint32_t cluster_fnv_mix(uint32_t h, const void* p, size_t n) {
     const uint8_t* b = (const uint8_t*)p;
-    uint32_t h = 2166136261u;
     for (size_t i = 0; i < n; i++) {
         h ^= b[i];
         h *= 16777619u;
     }
-    return n ? h : 0;
+    return h;
 }
+
+uint32_t cluster_fnv(const void* p, size_t n) {
+    return n ? cluster_fnv_mix(cluster_fnv_init(), p, n) : 0;
+}
+
+typedef char cluster_hello_bytes_ok[(sizeof(ClusterHello) == CLUSTER_HELLO_BYTES) ? 1 : -1];
 
 static void put32(uint8_t* o, uint32_t v) {
     o[0] = (uint8_t)v, o[1] = (uint8_t)(v >> 8), o[2] = (uint8_t)(v >> 16), o[3] = (uint8_t)(v >> 24);
@@ -64,6 +71,7 @@ void cluster_put_hello(uint8_t o[CLUSTER_HELLO_BYTES], const ClusterHello* h) {
     for (int k = 0; k < 8; k++) put32(o + 4 * k, v[k]);
     memcpy(o + 32, h->name, 32);
     o[63] = 0;
+    put32(o + 64, h->fingerprint);
 }
 
 void cluster_get_hello(const uint8_t i[CLUSTER_HELLO_BYTES], ClusterHello* h) {
@@ -71,6 +79,7 @@ void cluster_get_hello(const uint8_t i[CLUSTER_HELLO_BYTES], ClusterHello* h) {
     for (int k = 0; k < 8; k++) *v[k] = get32(i + 4 * k);
     memcpy(h->name, i + 32, 32);
     h->name[31] = 0;
+    h->fingerprint = get32(i + 64);
 }
 
 static int is_space(char c) { return c == ' ' || c == '\t' || c == '\r'; }
@@ -136,6 +145,10 @@ int cluster_parse_config(const char* text, size_t n, ClusterConfig* c, char* err
                          line);
                 return -1;
             }
+            if (c->port[c->n_workers] != CLUSTER_PORT) {
+                snprintf(err, err_n, "cluster.txt line %d: workers listen on port %d only", line, CLUSTER_PORT);
+                return -1;
+            }
             c->n_workers++;
         } else if (kl == 4 && !memcmp(text + ka, "name", 4)) {
             size_t l = vb - va < sizeof(c->name) - 1 ? vb - va : sizeof(c->name) - 1;
@@ -184,6 +197,10 @@ int cluster_check_chain(const ClusterHello* head, const ClusterHello* w, int nw,
         if (h->n_layers != head->n_layers || h->hidden != head->hidden || h->vocab != head->vocab ||
             strncmp(h->name, head->name, 32)) {
             snprintf(err, err_n, "worker %d has a different model (%.32s)", i + 1, h->name);
+            return -1;
+        }
+        if (head->fingerprint && h->fingerprint && head->fingerprint != h->fingerprint) {
+            snprintf(err, err_n, "worker %d was converted from different weights", i + 1);
             return -1;
         }
         if (h->layer_first != next || h->layer_end <= h->layer_first) {

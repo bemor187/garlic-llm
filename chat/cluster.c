@@ -109,6 +109,7 @@ static void hello_of(const Engine* e, ClusterHello* h) {
     h->n_layers = e->n_layers, h->hidden = e->hidden, h->vocab = e->vocab;
     h->flags = (e->has_embed ? 1u : 0u) | (e->has_lm ? 2u : 0u);
     memcpy(h->name, e->shard_name, 31);
+    h->fingerprint = e->idx_hash;
 }
 
 // ---- head ----------------------------------------------------------------------------------------------------------
@@ -210,6 +211,20 @@ static int head_state(EngineLink* l, Engine* e, int save) {
     return broadcast(e, CL_STATE, save ? CL_F_SAVE : 0);
 }
 
+static void head_abort(Engine* e, int n) {
+    e->link = NULL;
+    for (int i = 0; i < n && i < CLUSTER_MAX_WORKERS; i++) {
+        if (workers[i].fd >= 0) {
+            sceNetSocketClose(workers[i].fd);
+            workers[i].fd = -1;
+        }
+    }
+    free(rows_a);
+    free(rows_b);
+    rows_a = rows_b = NULL;
+    n_workers = 0;
+}
+
 static OrbisNetId connect_to(const uint8_t ip[4], uint16_t port) {
     OrbisNetId s = sceNetSocket("dg_cluster", ORBIS_NET_AF_INET, ORBIS_NET_SOCK_STREAM, CL_IPPROTO_TCP);
     if (s < 0) return -1;
@@ -228,6 +243,10 @@ static OrbisNetId connect_to(const uint8_t ip[4], uint16_t port) {
 }
 
 int cluster_head_start(Engine* e, ClusterStatus status, char* err, size_t err_n) {
+    if (!e->hidden || e->hidden > CLUSTER_MAX_HIDDEN) {
+        snprintf(err, err_n, "hidden %u does not fit the cluster link (max %u)", e->hidden, CLUSTER_MAX_HIDDEN);
+        return -1;
+    }
     size_t n = 0;
     uint8_t* text = read_all(CLUSTER_CONFIG, &n);
     if (!text) {
@@ -246,10 +265,14 @@ int cluster_head_start(Engine* e, ClusterStatus status, char* err, size_t err_n)
     rows_a = malloc(cap);
     rows_b = malloc(cap);
     if (!rows_a || !rows_b) {
+        free(rows_a);
+        free(rows_b);
+        rows_a = rows_b = NULL;
         snprintf(err, err_n, "no memory for the cluster's row buffers");
         return -1;
     }
     n_workers = cfg.n_workers;
+    for (int w = 0; w < n_workers; w++) workers[w].fd = -1;
     ClusterHello hellos[CLUSTER_MAX_WORKERS], me;
     for (int w = 0; w < n_workers; w++) {
         Worker* wk = &workers[w];
@@ -265,6 +288,7 @@ int cluster_head_start(Engine* e, ClusterStatus status, char* err, size_t err_n)
             if (sceKernelGetProcessTime() - t0 > (uint64_t)cfg.timeout_s * 1000000) {
                 snprintf(err, err_n, "worker %d (%s:%u) did not answer in %d s: is DarkGarlic open on it?", w + 1,
                          wk->where, cfg.port[w], cfg.timeout_s);
+                head_abort(e, w + 1);
                 return -1;
             }
             sceKernelUsleep(1000000);
@@ -272,9 +296,12 @@ int cluster_head_start(Engine* e, ClusterStatus status, char* err, size_t err_n)
         ClusterMsg m = {0}, rr;
         m.op = CL_HELLO, m.seq = ++seq;
         uint8_t hb[CLUSTER_HELLO_BYTES];
+        memset(hb, 0, sizeof(hb));
+        // 64 bytes: a worker from before the fingerprint. The last word stays 0.
         if (send_msg(wk->fd, &m, NULL) || recv_msg(wk->fd, &rr, hb, sizeof(hb)) || rr.op != CL_HELLO ||
-            rr.payload != CLUSTER_HELLO_BYTES) {
+            (rr.payload != CLUSTER_HELLO_BYTES && rr.payload != CLUSTER_HELLO_BYTES - 4)) {
             snprintf(err, err_n, "worker %d (%s) did not say hello", w + 1, wk->where);
+            head_abort(e, w + 1);
             return -1;
         }
         cluster_get_hello(hb, &hellos[w]);
@@ -283,13 +310,17 @@ int cluster_head_start(Engine* e, ClusterStatus status, char* err, size_t err_n)
             hellos[w].nodes, hellos[w].layer_first, hellos[w].layer_end - 1);
     }
     hello_of(e, &me);
-    if (cluster_check_chain(&me, hellos, n_workers, err, err_n)) return -1;
+    if (cluster_check_chain(&me, hellos, n_workers, err, err_n)) {
+        head_abort(e, n_workers);
+        return -1;
+    }
     head_link.rows = head_rows;
     head_link.reset = head_reset;
     head_link.state = head_state;
     e->link = &head_link;
     if (broadcast(e, CL_RESET, 0)) {   // every console starts from an empty conversation
         snprintf(err, err_n, "%s", e->error);
+        head_abort(e, n_workers);
         return -1;
     }
     snprintf(summary, sizeof(summary), "cluster of %u: layers 0..%u here", e->nodes, e->l1 - 1);
@@ -420,6 +451,10 @@ static void serve(Engine* e, OrbisNetId fd, float* in, ClusterStatus status) {
 
 void cluster_worker_main(Engine* e, ClusterStatus status) {
     char line[200];
+    if (!e->hidden || e->hidden > CLUSTER_MAX_HIDDEN) {
+        if (status) status("DarkGarlic worker: hidden size does not fit the cluster link");
+        for (;;) sceKernelUsleep(1000000);
+    }
     if (cluster_net_init()) {
         if (status) status("DarkGarlic worker: the network library did not start");
         for (;;) sceKernelUsleep(1000000);

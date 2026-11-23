@@ -54,15 +54,19 @@ typedef struct {
     uint32_t check;          // FNV-1a of the payload
 } ClusterMsg;
 
-// What a worker says about itself (CL_HELLO reply): 64 bytes.
+// What a worker says about itself (CL_HELLO reply): 68 bytes. A peer from before the fingerprint sends 64;
+// the missing word is read as 0 and the chain check skips the hash.
 typedef struct {
     uint32_t node, nodes, layer_first, layer_end;   // its shard (layer_end exclusive)
     uint32_t n_layers, hidden, vocab, flags;        // the whole model's shape; flags 1 = embed rows, 2 = lm_head
     char name[32];                                  // the model's name from the shard
+    uint32_t fingerprint;                           // hash of the shape; 0 = not set
 } ClusterHello;
-#define CLUSTER_HELLO_BYTES 64
+#define CLUSTER_HELLO_BYTES 68
 
 uint32_t cluster_fnv(const void* p, size_t n);
+uint32_t cluster_fnv_init(void);
+uint32_t cluster_fnv_mix(uint32_t h, const void* p, size_t n);
 void cluster_put_hdr(uint8_t out[CLUSTER_HDR], const ClusterMsg* m);
 // 0 if the header is ours (magic, version, sane payload size), -1 otherwise.
 int cluster_get_hdr(const uint8_t in[CLUSTER_HDR], ClusterMsg* m);
@@ -70,7 +74,7 @@ void cluster_put_hello(uint8_t out[CLUSTER_HELLO_BYTES], const ClusterHello* h);
 void cluster_get_hello(const uint8_t in[CLUSTER_HELLO_BYTES], ClusterHello* h);
 
 // The head's file (/data/darkgarlic/cluster.txt), one setting per line, '#' starts a comment:
-//   worker = 192.168.1.21          (node 1; then node 2 ... in order; ":port" optional)
+//   worker = 192.168.1.21          (node 1; then node 2 ... in order; optional ":8091" only)
 //   name = Abliterated Qwen3.5-27B (optional: the screen / API model name)
 //   timeout = 60                   (optional: seconds to wait for the workers at start-up)
 typedef struct {
@@ -86,7 +90,8 @@ int cluster_parse_config(const char* text, size_t n, ClusterConfig* c, char* err
 int cluster_parse_ip(const char* s, size_t n, uint8_t ip[4], uint16_t* port);
 
 // The head's own shard plus every worker's HELLO must chain: node i of n, layers contiguous from 0 to n_layers, the
-// same shape and name everywhere, lm_head only on the last. 0, or -1 with a message.
+// same shape and name everywhere, lm_head only on the last. When both fingerprints are non-zero they must match
+// (0 means an older peer that did not send one). 0, or -1 with a message.
 int cluster_check_chain(const ClusterHello* head, const ClusterHello* workers, int n_workers, char* err, size_t err_n);
 
 #endif
