@@ -79,6 +79,10 @@ static const GpuKernel* kern_opt(Engine* e, const char* name) {
 int spec_init(Engine* e, const char* dir) {
     Spec* s = &g_spec;
     memset(s, 0, sizeof(*s));
+    // Cluster shards: no MTP head yet (it needs the last hidden row and the embedding on one console; ROADMAP). A
+    // model from /data/darkgarlic takes its mtp.idx from there too, never the package's (another model's head).
+    if (e->shard) return -1;
+    if (e->model_dir[0]) dir = e->model_dir;
     char p[256];
     size_t sz;
     snprintf(p, sizeof(p), "%s/mtp.idx", dir);

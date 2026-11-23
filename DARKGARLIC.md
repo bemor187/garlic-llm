@@ -64,3 +64,19 @@ Press L3 on the chat screen. The header shows `API · <console-ip>:8080`. `GET /
 - A cold load on a base PS4 is on the order of 45 seconds. That figure is from upstream issue 9, which ran an abliterated conversion of this same format on firmware 13.52.
 - `/data/ps4ai_log.txt` should contain `weights: /data/qwen3.5-9b-q4s.bin` for a non-packed build. `Couldn't start` means a weight file is missing or short.
 - Russian speech turns the word `DarkGarlic` into `Дарк Гарлик` so the voice model does not spell the Latin name.
+
+## Bigger models and clusters (branch `darkgarlic-cluster`)
+
+This branch adds:
+
+- **A model override folder.** `/data/darkgarlic/model.idx` and the weights it names replace the packaged model, with no rebuild.
+- **An experimental cluster.** One model is split by layers across 2 or more PS4s on the same network. The head keeps the screen, the API and the first layers; the workers run the rest.
+
+The design, the shard format and the bring-up plan are in [docs/CLUSTER.md](docs/CLUSTER.md). The plans for improvements are in [docs/ROADMAP.md](docs/ROADMAP.md). The 2-console and 3-console setups live on `darkgarlic-cluster-2x` and `darkgarlic-cluster-3x`.
+
+```bash
+python pc/cluster_plan.py --list                                    # what fits on 1-4 consoles
+python pc/cluster_plan.py --model qwen3.5-27b --nodes 3 --quant mlp3
+gcc -std=c99 -Wall -Wextra -I chat tests/cluster_proto_test.c chat/cluster_proto.c -o build/cluster_proto_test && build/cluster_proto_test
+python pc/shard_model.py --self-test
+```

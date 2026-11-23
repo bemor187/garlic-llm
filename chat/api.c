@@ -14,6 +14,7 @@
 #include <orbis/libkernel.h>
 
 #include "api_proto.h"
+#include "cluster.h"
 #include "ui.h"
 
 #define API_ASSETS "/app0/assets"
@@ -263,14 +264,8 @@ static void* api_main(void* arg) {
 // time the API is turned on.
 static int api_setup(void) {
     if (ready) return 0;
-    int r = sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_NET);
-    if (r < 0) {
-        say("api: network module 0x%08X; the API stays off", r);
-        return -1;
-    }
-    r = sceNetInit();
-    if (r < 0) {
-        say("api: sceNetInit 0x%08X; the API stays off", r);
+    if (cluster_net_init()) {   // (shared with the cluster, which may have started it already)
+        say("api: no network library; the API stays off");
         return -1;
     }
     scePthreadMutexInit(&api_mu, NULL, "garlic_api");
