@@ -10,6 +10,8 @@ DarkGarlic LLM is a homebrew app for the PlayStation 4. It runs [Qwen3.5-9B](htt
 
 [Website](https://garlicllm.dev) · [Download](#install) · [Demo video](https://garlicllm.dev/#demo) · [Support the project](#support)
 
+> 🙏 **DarkGarlic needs hardware to reach Stage 2** (bigger models across several PS4s): PS4 Pros, Dell PowerEdge servers, compute, or any amount through Cash App [$bemor187](https://cash.app/$bemor187) or PayPal [kultivatedkustoms@gmail.com](https://www.paypal.com/donate/?business=kultivatedkustoms%40gmail.com&currency_code=USD). [How to help](#help-darkgarlic-grow-).
+
 ![DarkGarlic LLM: a fanged garlic in a cape on a black and red field](docs/chat.png)
 
 ## What it does
@@ -190,7 +192,27 @@ The scripts that made them from the original checkpoints are in `pc/`, and each 
 
 ## Support
 
-DarkGarlic LLM is free and open source. If you want to see more of it (more consoles tested, faster kernels), you can help fund the work:
+### Help DarkGarlic grow 🙏
+
+I build DarkGarlic on my own, with spare time and old hardware. Stage 2 is planned and partly written: bigger models such as Qwen3.5-27B, run across several PS4s ([future plans](docs/FUTURE_PLANS.md)). It is stuck until I have the hardware to test it on. If DarkGarlic has been useful or fun for you, anything helps, and I am truly grateful.
+
+**Hardware I am hoping for (used is perfect):**
+
+- **PS4 Pros**, or any PS4 that runs GoldHEN. The cluster needs 2–3 consoles.
+- **Dell PowerEdge servers**, or similar rack servers, for converting big models, testing and builds.
+- **Compute:** GPU time or cloud credits. Converting the 27B takes far more RAM and GPU than I have.
+- **A gigabit network switch** to connect the consoles.
+
+**Money, any amount:**
+
+- Cash App: [$bemor187](https://cash.app/$bemor187)
+- PayPal: [kultivatedkustoms@gmail.com](https://www.paypal.com/donate/?business=kultivatedkustoms%40gmail.com&currency_code=USD)
+
+To donate hardware or compute, [open an issue](https://github.com/bemor187/garlic-llm/issues/new) and we will work out the details. A ⭐, a share, or a test report from your console helps too. Thank you.
+
+### Support the original Garlic LLM
+
+DarkGarlic is a fork. The engine, the GPU kernels and the original app are Leonardo Alegría's work, and you can support him too:
 
 - [PayPal](https://www.paypal.com/donate/?business=leonardoalegria2002%40gmail.com&currency_code=USD)
 - [Ko-fi](https://ko-fi.com/leonardoalegria)
@@ -218,7 +240,7 @@ DarkGarlic LLM is built with the [OpenOrbis PS4 Toolchain](https://github.com/Op
 
 ## Contact
 
-DarkGarlic LLM is built by [Leonardo Alegría](https://www.linkedin.com/in/leonardoalegria/). Questions, collaborations and press: [leo@garlicllm.dev](mailto:leo@garlicllm.dev). Bugs and test results go to [GitHub issues](https://github.com/leonardo-alegria/garlic-llm/issues).
+The Garlic LLM engine and app are built by [Leonardo Alegría](https://www.linkedin.com/in/leonardoalegria/) (questions about Garlic LLM: [leo@garlicllm.dev](mailto:leo@garlicllm.dev), [upstream issues](https://github.com/leonardo-alegria/garlic-llm/issues)). The DarkGarlic fork is maintained by bemor187: DarkGarlic bugs, test results and hardware offers go to [this fork's issues](https://github.com/bemor187/garlic-llm/issues).
 
 ---
 

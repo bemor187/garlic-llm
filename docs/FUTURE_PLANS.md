@@ -25,7 +25,8 @@ The groundwork is already written on three branches. It has not run on a PS4 yet
 |---|---|
 | 2 more PS4s on GoldHEN, ideally PS4 Pros | The cluster needs 2–3 consoles to test. Pros have ~24 % more memory bandwidth and ~128 MiB more GPU memory for the model, and users report up to 56 tokens/s on the 9B. |
 | A gigabit switch and cables | Rows travel between consoles for every token. The PS4's gigabit Ethernet is enough; Wi-Fi is not reliable for it. |
-| A PC with 64 GB+ RAM, or cloud conversion time | Converting the 27B (about 55 GB in BF16) and running the PC reference checks against the console output. |
+| Dell PowerEdge (or similar) rack servers | A permanent home for model conversion, the PC reference checks, package builds and a mirror of the downloads, instead of borrowing a desktop. |
+| A PC with 64 GB+ RAM, or GPU compute / cloud credits | Converting the 27B (about 55 GB in BF16) and running the PC reference checks against the console output. |
 | Development time | GPU kernel work (§2.2) and the testing milestones. |
 
 ### 2.1 Cluster bring-up: bigger models over several PS4s
@@ -57,6 +58,8 @@ Planner numbers (`pc/cluster_plan.py`), base PS4s:
 - **Qwen3 path upgrades** (for the 14B): q4s/q3s weights, the batched prompt, and an int8 or TurboQuant KV cache.
 - **Mixture-of-experts support** (Qwen3.5-35B-A3B and up). This is the best long-term fit for a cluster: only ~3B parameters are read per token, so a much stronger model could run near today's 9B speed over 4–5 consoles.
 - **Model kernels from the override folder.** Allow a model-specific `kernels.bin` in `/data/darkgarlic`.
+- **Small, fast models.** Qwen3.5-2B and 4B (abliterated) as a quick-answer mode next to the 9B, switchable without a restart.
+- **GGUF import.** A converter from common GGUF files (Q4_K and similar) to DarkGarlic's q4s/q3s layout, so more models can be tried without the original BF16 checkpoint.
 
 ### 2.3 Speed
 
@@ -75,6 +78,7 @@ Planner numbers (`pc/cluster_plan.py`), base PS4s:
 - **Save and restore conversations**, with long system prompts prefilled once.
 - **Repetition control** (presence and frequency penalty). The abliterated weights loop more than the original.
 - **Temperature and fan readout** for long API sessions.
+- **Voice mode or speed mode, per session.** Choose between voice (the MTP head's memory goes to the voice models, ~22 tokens/s) and full text speed, without restarting.
 - **A web chat page** served by the console, for phones and PCs on the same network.
 
 ### 2.5 Cluster robustness
@@ -82,6 +86,14 @@ Planner numbers (`pc/cluster_plan.py`), base PS4s:
 - Reconnect a worker that drops, then replay the conversation.
 - A model fingerprint in the cluster handshake, to catch mixed conversions.
 - Each worker's status and round-trip time in the head's chat header.
+
+## How to help
+
+Stage 2 starts when the hardware and funding are there. Any amount helps:
+
+- Cash App: [$bemor187](https://cash.app/$bemor187)
+- PayPal: [kultivatedkustoms@gmail.com](https://www.paypal.com/donate/?business=kultivatedkustoms%40gmail.com&currency_code=USD)
+- Hardware or compute: [open an issue](https://github.com/bemor187/garlic-llm/issues/new) (PS4 Pros, Dell PowerEdge servers, GPU time / cloud credits, a gigabit switch).
 
 ## Ground rules that carry into Stage 2
 
